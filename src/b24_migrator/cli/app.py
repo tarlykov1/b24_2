@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import typer
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
+from b24_migrator.cli.exit_codes import ExitCode
 from b24_migrator.config import load_runtime_config
 from b24_migrator.domain.models import ExecutionResult
 from b24_migrator.errors import AppError
@@ -37,17 +40,41 @@ def _emit(payload: dict[str, object]) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+def _exit_code_for_error(exc: AppError) -> ExitCode:
+    if exc.code.startswith("CONFIG_"):
+        return ExitCode.CONFIG_ERROR
+    if exc.code.startswith("VALIDATION_"):
+        return ExitCode.VALIDATION_ERROR
+    if exc.code.startswith("DB_"):
+        return ExitCode.DATABASE_CONNECTION_ERROR
+    return ExitCode.RUNTIME_FAILURE
+
+
 def _handle_error(exc: AppError) -> None:
     _emit(exc.to_dict())
-    raise typer.Exit(code=2)
+    raise typer.Exit(code=int(_exit_code_for_error(exc)))
 
 
-@app.command("plan")
-def plan_command(
+def _handle_sqlalchemy_error(exc: SQLAlchemyError) -> None:
+    _handle_error(
+        AppError(
+            code="DB_CONNECTION_ERROR",
+            message="Unable to connect to the runtime database",
+            details={"error": str(exc)},
+        )
+    )
+
+
+def _asdict(value: Any) -> dict[str, Any]:
+    return value.__dict__.copy() if hasattr(value, "__dict__") else dict(value)
+
+
+@app.command("create-job")
+def create_job_command(
     config: Path = typer.Option(Path("migration.config.yml"), "--config"),
     scope: list[str] = typer.Option([], "--scope", help="Repeatable scope override."),
 ) -> None:
-    """Create and persist deterministic migration plan."""
+    """Create and persist deterministic migration job plan."""
 
     try:
         container = RuntimeContainer(config)
@@ -63,9 +90,113 @@ def plan_command(
             repo.save(plan)
             session.commit()
 
-        _emit(JsonResponse(ok=True, data={"plan": plan.__dict__}).to_dict())
+        _emit(JsonResponse(ok=True, data={"job": _asdict(plan)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("status")
+def status_command(
+    plan_id: str | None = typer.Option(None, "--plan-id"),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    """Return current status of a migration plan or run."""
+
+    try:
+        if not plan_id and not run_id:
+            raise AppError(
+                code="VALIDATION_MISSING_IDENTIFIER",
+                message="Either --plan-id or --run-id must be provided",
+            )
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        with container.session_factory.create_session() as session:
+            plan_repo = PlanRepository(session)
+            run_repo = RunRepository(session)
+            if run_id:
+                run = run_repo.get(run_id)
+                if run is None:
+                    raise AppError("RUN_NOT_FOUND", "Run does not exist", {"run_id": run_id})
+                _emit(JsonResponse(ok=True, data={"run": _asdict(run)}).to_dict())
+                return
+
+            assert plan_id is not None
+            plan = plan_repo.get(plan_id)
+            if plan is None:
+                raise AppError("PLAN_NOT_FOUND", "Migration plan does not exist", {"plan_id": plan_id})
+            latest = run_repo.find_latest_for_plan(plan_id)
+            payload: dict[str, Any] = {"plan": _asdict(plan)}
+            if latest is not None:
+                payload["latest_run"] = _asdict(latest)
+            _emit(JsonResponse(ok=True, data=payload).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("report")
+def report_command(
+    run_id: str = typer.Option(..., "--run-id"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    """Return verification report for a stored run."""
+
+    try:
+        container = RuntimeContainer(config)
+        with container.session_factory.create_session() as session:
+            run_repo = RunRepository(session)
+            run = run_repo.get(run_id)
+            if run is None:
+                raise AppError("RUN_NOT_FOUND", "Run does not exist", {"run_id": run_id})
+            report = container.verifier.verify_run(run)
+
+        _emit(JsonResponse(ok=True, data={"verification": report, "run": _asdict(run)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("deployment:check")
+def deployment_check_command(
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    """Validate configuration and database connectivity for deployment."""
+
+    try:
+        container = RuntimeContainer(config)
+        with container.session_factory.engine.connect():
+            pass
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={
+                    "deployment": {
+                        "config_path": str(config),
+                        "database_url": container.config.database_url,
+                        "status": "ok",
+                    }
+                },
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("plan")
+def plan_command(
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+    scope: list[str] = typer.Option([], "--scope", help="Repeatable scope override."),
+) -> None:
+    """Backward-compatible alias for create-job."""
+
+    create_job_command(config=config, scope=scope)
 
 
 @app.command("execute")
@@ -89,9 +220,11 @@ def execute_command(
             run_repo.save(result)
             session.commit()
 
-        _emit(JsonResponse(ok=True, data={"run": result.__dict__}).to_dict())
+        _emit(JsonResponse(ok=True, data={"run": _asdict(result)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
 
 
 @app.command("resume")
@@ -117,9 +250,11 @@ def resume_command(
             run_repo.save(resumed)
             session.commit()
 
-        _emit(JsonResponse(ok=True, data={"run": resumed.__dict__}).to_dict())
+        _emit(JsonResponse(ok=True, data={"run": _asdict(resumed)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)
 
 
 @app.command("verify")
@@ -127,20 +262,9 @@ def verify_command(
     run_id: str = typer.Option(..., "--run-id"),
     config: Path = typer.Option(Path("migration.config.yml"), "--config"),
 ) -> None:
-    """Run deterministic verification checks for stored run."""
+    """Backward-compatible alias for report."""
 
-    try:
-        container = RuntimeContainer(config)
-        with container.session_factory.create_session() as session:
-            run_repo = RunRepository(session)
-            run = run_repo.get(run_id)
-            if run is None:
-                raise AppError("RUN_NOT_FOUND", "Run does not exist", {"run_id": run_id})
-            report = container.verifier.verify_run(run)
-
-        _emit(JsonResponse(ok=True, data={"verification": report}).to_dict())
-    except AppError as exc:
-        _handle_error(exc)
+    report_command(run_id=run_id, config=config)
 
 
 @app.command("checkpoint")
@@ -167,3 +291,5 @@ def checkpoint_command(
         _emit(JsonResponse(ok=True, data=data).to_dict())
     except AppError as exc:
         _handle_error(exc)
+    except OperationalError as exc:
+        _handle_sqlalchemy_error(exc)

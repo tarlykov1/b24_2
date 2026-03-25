@@ -13,4 +13,7 @@ class AppError(Exception):
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"ok": False, "error": {"code": self.code, "message": self.message, "details": self.details}}
+        payload: dict[str, Any] = {"ok": False, "error_code": self.code, "message": self.message}
+        if self.details:
+            payload["details"] = self.details
+        return payload
