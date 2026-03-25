@@ -31,32 +31,52 @@ def _write_config(tmp_path: Path) -> Path:
     return config_path
 
 
-def test_create_job_returns_explicit_job_payload(tmp_path: Path) -> None:
+def test_lifecycle_create_job_plan_execute_status_report_resume(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 
-    result = runner.invoke(app, ["create-job", "--config", str(config_path)])
+    create_job = runner.invoke(app, ["create-job", "--config", str(config_path)])
+    assert create_job.exit_code == ExitCode.SUCCESS
+    create_payload = json.loads(create_job.stdout)
+    job_id = create_payload["data"]["job"]["job_id"]
+
+    create_plan = runner.invoke(app, ["plan", "--config", str(config_path), "--job-id", job_id])
+    assert create_plan.exit_code == ExitCode.SUCCESS
+    plan_payload = json.loads(create_plan.stdout)
+    plan_id = plan_payload["data"]["plan"]["plan_id"]
+    assert plan_payload["data"]["plan"]["job_id"] == job_id
+
+    execute = runner.invoke(app, ["execute", "--config", str(config_path), "--plan-id", plan_id])
+    assert execute.exit_code == ExitCode.SUCCESS
+    run_id = json.loads(execute.stdout)["data"]["run"]["run_id"]
+
+    status = runner.invoke(app, ["status", "--config", str(config_path), "--plan-id", plan_id])
+    assert status.exit_code == ExitCode.SUCCESS
+    status_payload = json.loads(status.stdout)
+    assert status_payload["data"]["plan"]["plan_id"] == plan_id
+    assert status_payload["data"]["latest_run"]["run_id"] == run_id
+
+    report = runner.invoke(app, ["report", "--config", str(config_path), "--run-id", run_id])
+    assert report.exit_code == ExitCode.SUCCESS
+    report_payload = json.loads(report.stdout)
+    assert report_payload["data"]["run"]["run_id"] == run_id
+    assert report_payload["data"]["logs"]
+
+    resume = runner.invoke(app, ["resume", "--config", str(config_path), "--plan-id", plan_id])
+    assert resume.exit_code == ExitCode.SUCCESS
+    resumed = json.loads(resume.stdout)["data"]["run"]
+    assert resumed["run_id"] == run_id
+    assert resumed["processed_items"] > 0
+
+
+def test_plan_without_job_id_backfills_job_for_backward_compatibility(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+
+    result = runner.invoke(app, ["plan", "--config", str(config_path)])
 
     assert result.exit_code == ExitCode.SUCCESS
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
-    assert payload["data"]["job"]["source_portal"] == "https://source"
-    assert payload["data"]["job"]["job_id"] == payload["data"]["job"]["plan_id"]
-
-
-def test_status_for_plan_includes_latest_run_after_execute(tmp_path: Path) -> None:
-    config_path = _write_config(tmp_path)
-
-    create = runner.invoke(app, ["create-job", "--config", str(config_path)])
-    plan_id = json.loads(create.stdout)["data"]["job"]["plan_id"]
-    runner.invoke(app, ["execute", "--config", str(config_path), "--plan-id", plan_id])
-
-    result = runner.invoke(app, ["status", "--config", str(config_path), "--plan-id", plan_id])
-
-    assert result.exit_code == ExitCode.SUCCESS
-    payload = json.loads(result.stdout)
-    assert payload["ok"] is True
-    assert payload["data"]["plan"]["plan_id"] == plan_id
-    assert payload["data"]["latest_run"]["plan_id"] == plan_id
+    assert payload["data"]["job"]["job_id"] == payload["data"]["plan"]["job_id"]
 
 
 def test_deployment_check_returns_sanitized_database_output(tmp_path: Path, monkeypatch) -> None:
