@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from sqlalchemy.exc import ArgumentError
+from sqlalchemy.engine import make_url
 
 from b24_migrator.errors import AppError
 
@@ -20,17 +22,29 @@ class PortalConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    database_url: str = Field(description="MySQL DSN for runtime state")
+    database_url: str = Field(description="SQLAlchemy DSN for runtime state")
     source: PortalConfig
     target: PortalConfig
     default_scope: list[str] = Field(default_factory=lambda: ["crm", "tasks"])
 
     @field_validator("database_url")
     @classmethod
-    def validate_mysql_url(cls, value: str) -> str:
-        if not value.startswith("mysql+"):
-            raise ValueError("database_url must use mysql+ driver prefix")
+    def validate_database_url(cls, value: str) -> str:
+        try:
+            make_url(value)
+        except ArgumentError as exc:
+            raise ValueError("database_url must be a valid SQLAlchemy URL") from exc
         return value
+
+
+def _load_yaml_module() -> Any:
+    if importlib.util.find_spec("yaml") is None:
+        raise AppError(
+            code="CONFIG_DEPENDENCY_MISSING",
+            message="PyYAML is required to read migration.config.yml",
+            details={"dependency": "PyYAML", "install": "pip install PyYAML"},
+        )
+    return importlib.import_module("yaml")
 
 
 def _apply_env_overrides(payload: dict[str, Any]) -> dict[str, Any]:
@@ -66,8 +80,16 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
             details={"path": str(config_path)},
         )
 
+    yaml = _load_yaml_module()
     with config_path.open("r", encoding="utf-8") as fh:
-        raw_payload = yaml.safe_load(fh) or {}
+        try:
+            raw_payload = yaml.safe_load(fh) or {}
+        except yaml.YAMLError as exc:
+            raise AppError(
+                code="CONFIG_YAML_PARSE_ERROR",
+                message="Config file is not valid YAML",
+                details={"path": str(config_path), "error": str(exc)},
+            ) from exc
 
     payload = _apply_env_overrides(raw_payload)
 
