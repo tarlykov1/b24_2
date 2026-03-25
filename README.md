@@ -2,15 +2,22 @@
 
 Production-oriented Python runtime scaffold for deterministic Bitrix24 structured data migration.
 
-## Features in MVP
+## MVP features
 
-- Deterministic job generation (`create-job`)
-- `execute` with `--dry-run`
-- `resume` from persisted run checkpoint
-- Runtime state persistence in SQL database (SQLAlchemy + Alembic)
-- Deterministic JSON responses for all CLI commands
-- Runtime status/report commands (`status`, `report`)
-- Deployment readiness check (`deployment:check`)
+- Deterministic job creation (`create-job`).
+- `execute` with `--dry-run`.
+- `resume` from persisted run checkpoint.
+- Runtime state persistence in SQL database (SQLAlchemy + Alembic).
+- Deterministic JSON responses for all CLI commands.
+- Runtime status/report commands (`status`, `report`).
+- Deployment readiness check (`deployment:check`) with sanitized DB output.
+
+## Storage policy
+
+- **Production mode is MySQL-only** for runtime state.
+- SQLite is allowed only with explicit non-production mode (`runtime_mode: dev` or `runtime_mode: test`).
+
+This rule is validated during config loading, so runtime behavior is explicit and deterministic.
 
 ## Tech stack
 
@@ -27,16 +34,17 @@ Production-oriented Python runtime scaffold for deterministic Bitrix24 structure
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -e .
 ```
 
-If you run tests or CLI in a minimal environment, ensure YAML parser is installed:
+Install developer/test extras when needed:
 
 ```bash
-pip install PyYAML
+pip install -e .[dev]
 ```
 
-## Config
+## Configuration
 
 1. Copy template:
 
@@ -44,21 +52,39 @@ pip install PyYAML
 cp migration.config.yml.example migration.config.yml
 ```
 
-2. Fill values. You can override core settings using env:
+2. Fill values (`migration.config.yml` example):
 
+```yaml
+runtime_mode: production
+database_url: mysql+pymysql://b24_user:b24_password@127.0.0.1:3306/b24_runtime
+source:
+  base_url: https://source.bitrix24.example
+  webhook: source_webhook_token
+target:
+  base_url: https://target.bitrix24.example
+  webhook: target_webhook_token
+default_scope:
+  - crm
+  - tasks
+```
+
+3. Optional env overrides:
+
+- `MIGRATION_RUNTIME_MODE`
 - `MIGRATION_DATABASE_URL`
 - `MIGRATION_SOURCE_BASE_URL`
 - `MIGRATION_SOURCE_WEBHOOK`
 - `MIGRATION_TARGET_BASE_URL`
 - `MIGRATION_TARGET_WEBHOOK`
 
-If config file is missing, invalid, or PyYAML is unavailable, CLI returns structured JSON error with deterministic exit code.
+If config is missing/invalid, CLI returns structured JSON error with deterministic exit code.
 
 ## CLI examples
 
 ```bash
 b24-runtime create-job --config migration.config.yml
 b24-runtime status --config migration.config.yml --plan-id <plan_id>
+b24-runtime execute --config migration.config.yml --plan-id <plan_id>
 b24-runtime report --config migration.config.yml --run-id <run_id>
 b24-runtime deployment:check --config migration.config.yml
 

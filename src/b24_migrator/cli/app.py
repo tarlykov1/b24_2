@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
 from b24_migrator.cli.exit_codes import ExitCode
 from b24_migrator.config import load_runtime_config
@@ -27,7 +28,14 @@ class RuntimeContainer:
 
     def __init__(self, config_path: Path) -> None:
         self.config = load_runtime_config(config_path)
-        self.session_factory = SessionFactory(self.config.database_url)
+        try:
+            self.session_factory = SessionFactory(self.config.database_url)
+        except SQLAlchemyError as exc:
+            raise AppError(
+                code="RUNTIME_INIT_DB_ERROR",
+                message="Failed to initialize runtime database engine",
+                details={"error": str(exc)},
+            ) from exc
         self.planner = PlannerService()
         self.executor = ExecutionService()
         self.verifier = VerificationService()
@@ -69,6 +77,24 @@ def _asdict(value: Any) -> dict[str, Any]:
     return value.__dict__.copy() if hasattr(value, "__dict__") else dict(value)
 
 
+def _job_payload_from_plan(plan: Any) -> dict[str, Any]:
+    payload = _asdict(plan)
+    payload["job_id"] = payload["plan_id"]
+    return payload
+
+
+def _safe_database_details(database_url: str) -> dict[str, Any]:
+    parsed = make_url(database_url)
+    return {
+        "driver": parsed.drivername,
+        "host": parsed.host,
+        "port": parsed.port,
+        "database": parsed.database,
+        "username": parsed.username,
+        "dsn": parsed.render_as_string(hide_password=True),
+    }
+
+
 @app.command("create-job")
 def create_job_command(
     config: Path = typer.Option(Path("migration.config.yml"), "--config"),
@@ -90,10 +116,10 @@ def create_job_command(
             repo.save(plan)
             session.commit()
 
-        _emit(JsonResponse(ok=True, data={"job": _asdict(plan)}).to_dict())
+        _emit(JsonResponse(ok=True, data={"job": _job_payload_from_plan(plan)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -134,7 +160,7 @@ def status_command(
             _emit(JsonResponse(ok=True, data=payload).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -157,7 +183,7 @@ def report_command(
         _emit(JsonResponse(ok=True, data={"verification": report, "run": _asdict(run)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -177,7 +203,7 @@ def deployment_check_command(
                 data={
                     "deployment": {
                         "config_path": str(config),
-                        "database_url": container.config.database_url,
+                        "database": _safe_database_details(container.config.database_url),
                         "status": "ok",
                     }
                 },
@@ -185,7 +211,7 @@ def deployment_check_command(
         )
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -223,7 +249,7 @@ def execute_command(
         _emit(JsonResponse(ok=True, data={"run": _asdict(result)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -253,7 +279,7 @@ def resume_command(
         _emit(JsonResponse(ok=True, data={"run": _asdict(resumed)}).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
 
 
@@ -291,5 +317,5 @@ def checkpoint_command(
         _emit(JsonResponse(ok=True, data=data).to_dict())
     except AppError as exc:
         _handle_error(exc)
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
