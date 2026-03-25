@@ -2,11 +2,20 @@
 
 Production-oriented Python runtime scaffold for deterministic Bitrix24 structured data migration.
 
+## Runtime state model
+
+- `Job` — top-level migration entity (`job -> 0..N plans`).
+- `Plan` — deterministic migration plan owned by a job (`plan -> 0..N runs`).
+- `Run` — execution attempt/state for a plan.
+- `Checkpoint` — persisted runtime checkpoint/state bound to a run.
+- `Log` — run-level execution log entries (used by `report`).
+
 ## MVP features
 
 - Deterministic job creation (`create-job`).
+- Explicit plan creation (`plan`) for a selected job.
 - `execute` with `--dry-run`.
-- `resume` from persisted run checkpoint.
+- `resume` from persisted checkpoint by `--plan-id` or `--run-id`.
 - Runtime state persistence in SQL database (SQLAlchemy + Alembic).
 - Deterministic JSON responses for all CLI commands.
 - Runtime status/report commands (`status`, `report`).
@@ -82,15 +91,26 @@ If config is missing/invalid, CLI returns structured JSON error with determinist
 ## CLI examples
 
 ```bash
+# 1) Create a job
 b24-runtime create-job --config migration.config.yml
-b24-runtime status --config migration.config.yml --plan-id <plan_id>
-b24-runtime execute --config migration.config.yml --plan-id <plan_id>
-b24-runtime report --config migration.config.yml --run-id <run_id>
-b24-runtime deployment:check --config migration.config.yml
 
-# Backward-compatible aliases:
+# 2) Create plan for job
+b24-runtime plan --config migration.config.yml --job-id <job_id>
+
+# Backward-compatible shortcut: if --job-id is omitted, command creates a job automatically
 b24-runtime plan --config migration.config.yml
+
+# 3) Execute / inspect / resume
+b24-runtime execute --config migration.config.yml --plan-id <plan_id>
+b24-runtime status --config migration.config.yml --job-id <job_id>
+b24-runtime status --config migration.config.yml --plan-id <plan_id>
+b24-runtime status --config migration.config.yml --run-id <run_id>
+b24-runtime report --config migration.config.yml --run-id <run_id>
+b24-runtime resume --config migration.config.yml --plan-id <plan_id>
+
+# Infra validation and compatibility alias
+b24-runtime deployment:check --config migration.config.yml
 b24-runtime verify --config migration.config.yml --run-id <run_id>
 ```
 
-All commands print JSON for automation.
+All commands print structured JSON for automation.
