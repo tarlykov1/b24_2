@@ -1,0 +1,12 @@
+database_url: mysql+pymysql://b24_user:b24_password@127.0.0.1:3306/b24_runtime
+source:
+  base_url: https://source.example.ru
+  webhook: 1/xxxx
+
+target:
+  base_url: https://target.example.ru
+  webhook: 1/yyyy
+
+default_scope:
+  - crm
+  - tasks
