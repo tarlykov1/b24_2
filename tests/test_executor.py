@@ -8,6 +8,7 @@ from b24_migrator.services.executor import ExecutionService
 def _plan() -> MigrationPlan:
     return MigrationPlan(
         plan_id="plan-1",
+        job_id="job-1",
         source_portal="https://source",
         target_portal="https://target",
         scope=["crm", "tasks"],
