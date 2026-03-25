@@ -7,10 +7,11 @@ from b24_migrator.config import load_runtime_config
 from b24_migrator.errors import AppError
 
 
-def test_load_config_success(tmp_path: Path) -> None:
+def test_load_config_success_with_explicit_test_mode(tmp_path: Path) -> None:
     cfg = tmp_path / "migration.config.yml"
     cfg.write_text(
         """
+        runtime_mode: test
         database_url: sqlite+pysqlite:///runtime.db
         source:
           base_url: https://source
@@ -24,8 +25,31 @@ def test_load_config_success(tmp_path: Path) -> None:
 
     result = load_runtime_config(cfg)
 
+    assert result.runtime_mode == "test"
     assert result.database_url.startswith("sqlite+")
     assert result.source.base_url == "https://source"
+
+
+def test_load_config_rejects_sqlite_in_production_mode(tmp_path: Path) -> None:
+    cfg = tmp_path / "migration.config.yml"
+    cfg.write_text(
+        """
+        runtime_mode: production
+        database_url: sqlite+pysqlite:///runtime.db
+        source:
+          base_url: https://source
+          webhook: one
+        target:
+          base_url: https://target
+          webhook: two
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AppError) as exc:
+        load_runtime_config(cfg)
+
+    assert exc.value.code == "CONFIG_VALIDATION_ERROR"
 
 
 def test_load_config_file_not_found(tmp_path: Path) -> None:

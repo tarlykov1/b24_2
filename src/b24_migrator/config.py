@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.exc import ArgumentError
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 from b24_migrator.errors import AppError
 
@@ -22,6 +22,10 @@ class PortalConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    runtime_mode: Literal["production", "dev", "test"] = Field(
+        default="production",
+        description="Runtime mode. production enforces MySQL-only storage backend.",
+    )
     database_url: str = Field(description="SQLAlchemy DSN for runtime state")
     source: PortalConfig
     target: PortalConfig
@@ -36,6 +40,25 @@ class RuntimeConfig(BaseModel):
             raise ValueError("database_url must be a valid SQLAlchemy URL") from exc
         return value
 
+    @model_validator(mode="after")
+    def validate_storage_policy(self) -> RuntimeConfig:
+        engine_name = database_engine_name(self.database_url)
+        if self.runtime_mode == "production" and engine_name != "mysql":
+            raise ValueError(
+                "production/runtime storage is MySQL-only; use runtime_mode=dev|test for explicit non-production override"
+            )
+        return self
+
+
+def database_engine_name(database_url: str) -> str:
+    url: URL = make_url(database_url)
+    backend = url.get_backend_name()
+    return backend.lower()
+
+
+def is_mysql_url(database_url: str) -> bool:
+    return database_engine_name(database_url) == "mysql"
+
 
 def _load_yaml_module() -> Any:
     if importlib.util.find_spec("yaml") is None:
@@ -49,6 +72,7 @@ def _load_yaml_module() -> Any:
 
 def _apply_env_overrides(payload: dict[str, Any]) -> dict[str, Any]:
     mapping = {
+        "MIGRATION_RUNTIME_MODE": ("runtime_mode",),
         "MIGRATION_DATABASE_URL": ("database_url",),
         "MIGRATION_SOURCE_BASE_URL": ("source", "base_url"),
         "MIGRATION_SOURCE_WEBHOOK": ("source", "webhook"),
