@@ -17,6 +17,7 @@ def test_readme_cli_examples_match_current_commands() -> None:
     for cmd in [
         "b24-runtime create-job",
         "b24-runtime status",
+        "b24-runtime checkpoint",
         "b24-runtime execute",
         "b24-runtime report",
         "b24-runtime deployment:check",
