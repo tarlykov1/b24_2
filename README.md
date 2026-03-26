@@ -19,6 +19,7 @@ Production-oriented Python runtime scaffold for deterministic Bitrix24 structure
 - Runtime state persistence in SQL database (SQLAlchemy + Alembic).
 - Deterministic JSON responses for all CLI commands.
 - Runtime status/report commands (`status`, `report`).
+- Runtime checkpoint inspection (`checkpoint`).
 - Deployment readiness check (`deployment:check`) with sanitized DB output.
 
 ## Storage policy
@@ -105,6 +106,7 @@ b24-runtime execute --config migration.config.yml --plan-id <plan_id>
 b24-runtime status --config migration.config.yml --job-id <job_id>
 b24-runtime status --config migration.config.yml --plan-id <plan_id>
 b24-runtime status --config migration.config.yml --run-id <run_id>
+b24-runtime checkpoint --config migration.config.yml --run-id <run_id>
 b24-runtime report --config migration.config.yml --run-id <run_id>
 b24-runtime resume --config migration.config.yml --plan-id <plan_id>
 
