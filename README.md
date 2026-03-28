@@ -1,180 +1,202 @@
-# b24-migration-runtime (MVP)
+# b24-migration-runtime (enterprise baseline extension)
 
-Production-oriented runtime for deterministic Bitrix24 structured data migration with **CLI + Web UI** over one shared service layer.
+Production-oriented runtime for deterministic Bitrix24 migration with **CLI + Web UI** over one shared service layer.
 
-## Runtime state model
+## Summary
 
-- `Job` — top-level migration entity (`job -> 0..N plans`).
-- `Plan` — deterministic migration plan owned by a job (`plan -> 0..N runs`).
-- `Run` — execution attempt/state for a plan.
-- `Checkpoint` — persisted runtime checkpoint/state bound to a run.
-- `Log` — run-level execution log entries.
-- `Audit` — actor/action/outcome trace for UI and CLI-triggered actions.
+This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds enterprise migration building blocks:
 
-## MVP features
+- explicit supported migration matrix;
+- canonical source↔target mapping subsystem (without relying on ID equality);
+- user conflict policy with manual review queue;
+- domain dependency graph and execution order;
+- expanded verification (`verify:counts`, `verify:relations`, `verify:integrity`, `verify:files`) persisted in DB;
+- cleanup/delta/cutover planning with safety rails (dry-run first, preserve users policy);
+- enterprise UI screen for matrix/mappings/conflicts/verification/cleanup/delta.
 
-- Deterministic job creation (`create-job`).
-- Explicit plan creation (`plan`) for a selected job.
-- `execute` with `--dry-run`.
-- `resume` from persisted checkpoint by `--plan-id` or `--run-id`.
-- Runtime state persistence in SQL database (SQLAlchemy + Alembic-compatible schema).
-- Deterministic JSON responses for CLI and HTTP API.
-- Web UI dashboard with quick actions, run progress, logs and configuration.
-- Deployment readiness check (`deployment:check`) with sanitized DB output.
+## What is treated as existing baseline
 
-## Storage policy
+Unchanged architectural baseline from previous PR:
 
-- **Production mode is MySQL-only** for runtime state.
-- SQLite is allowed only with explicit non-production mode (`runtime_mode: dev` or `runtime_mode: test`).
+- RuntimeService / shared service layer.
+- CLI commands and deterministic JSON output style.
+- FastAPI + Jinja2/HTMX MVP dashboard/config/run pages.
+- Persistent runtime/audit storage.
+- Dockerfile, docker-compose, `.env.example`, config templates.
 
-This rule is validated during config loading.
+## Supported migration matrix
 
-## Tech stack
+| Entity | Status | Source API | Target API | Dependencies | Mapping | Verification | Delta | Cleanup | Risk notes |
+|---|---|---|---|---|---|---|---|---|---|
+| users | implemented | user.get/list | user.get/list | - | XML_ID/email/login/manual | counts+relations+integrity | incremental match refresh | preserve target users only | ambiguous identity review queue |
+| groups | partial | sonet_group.get | sonet_group.create/update | users | canonical map | counts+relations | planned | preview only | roles depend on user_map |
+| projects | partial | sonet_group.get(project) | sonet_group.create(project) | users, groups | canonical map | counts+relations | planned | preview only | owner/scrum variance |
+| tasks | partial | tasks.task.list/get | tasks.task.add/update | users, groups/projects | canonical map | counts+relations+integrity | planned | preview only | assignee/group references |
+| crm | partial | crm.*.list | crm.*.add/update | users, schemas | canonical map | counts+relations+integrity | planned | preview only | stage/category remap |
+| business processes | partial | bizproc.workflow.template.list | bizproc.workflow.template.add | users, schemas | canonical map | relations+integrity | planned | preview only | template constants/users |
+| smart processes | partial | crm.type + crm.item | crm.type + crm.item | users, schemas | canonical map | counts+relations+integrity | planned | preview only | type before items |
+| comments | partial | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | relations+integrity | planned | preview only | owner entity mapping first |
+| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | payload transfer policy |
+| reports | planned | report.* | report.* | users, crm/tasks/items | canonical map | relations | planned | preview only | API variance by plan |
+| robots | partial | crm.automation.* | crm.automation.* | bp, schemas | canonical map | relations+integrity | planned | preview only | stage/action remap |
+| webhooks | implemented | event.bind/list | event.bind/list | users | canonical map | integrity | planned | preview only | rotate secrets at cutover |
+| automation | partial | bizproc + crm.automation.* | bizproc + crm.automation.* | bp, robots | canonical map | relations+integrity | planned | preview only | tenant-specific references |
 
-- Python 3.12
-- Typer
-- FastAPI + Jinja2 + HTMX
-- SQLAlchemy 2.x
-- Alembic
-- Pydantic v2
-- pytest
+## Unified mapping layer
 
-## Installation
+Persisted table `migration_mappings` fields:
+
+- `entity_type`, `source_id`, `source_uid`, `target_id`, `target_uid`
+- `status`, `resolution_strategy`, `verification_status`
+- `linked_parent_type`, `linked_parent_source_id`, `linked_parent_target_id`
+- `payload_hash`, `created_at`, `updated_at`, `error_payload_json`
+
+Supported entities in canonical mapping subsystem:
+
+- users, groups, projects, tasks, crm entities, comments, files,
+- bp templates, robots, smart process types/items, reports, webhooks.
+
+## User conflict policy
+
+`UserResolutionService` applies matching order:
+
+1. XML_ID
+2. email
+3. login
+4. otherwise manual review queue
+
+Rules:
+
+- target users are **preserved** (not deleted by cleanup);
+- ambiguous matches go to `migration_user_review_queue`;
+- unmatched users are stored as mapping rows with `status=unmatched` and explicit error payload;
+- all non-user references are expected to resolve through `user_map` mapping rows.
+
+## Domain modules and execution graph
+
+Domain lifecycle tracking is provided for:
+
+- Users
+- Groups/Projects
+- Tasks
+- CRM
+- Smart Processes
+- Business Processes / Robots / Automation
+- Comments
+- Files
+- Reports
+- Webhooks / Integrations
+
+Execution order graph:
+
+1. users
+2. groups/projects
+3. schemas/custom fields/categories/stages
+4. BP/robots/automation schemas
+5. CRM/tasks/smart-process items
+6. comments
+7. files
+8. reports
+9. verification
+10. delta
+11. cutover
+
+## Verification coverage
+
+Checks persisted in `migration_verification_results`:
+
+- `verify:counts`
+- `verify:relations`
+- `verify:integrity`
+- `verify:files`
+
+Relation rules covered:
+
+- task -> user
+- task -> group/project
+- deal -> company/contact
+- crm entity -> stage/category/custom field
+- comment -> entity
+- file -> owner entity
+- bp template -> user/field/entity-type
+- robot -> stage/action/assignee
+- smart process item -> type/field/entity
+- report -> owner/filter/source entity
+- webhook/integration -> target binding validity
+
+Verification output is available in DB, CLI and Web UI.
+
+## Delta / cutover / cleanup flow
+
+Implemented control-plane commands/services:
+
+- target inspection
+- cleanup-plan (dry-run safety by default)
+- cleanup-execute (unsafe destructive path blocked without explicit safe plan)
+- preserve users policy
+- delta plan/execute
+- cutover readiness based on unresolved mappings + verification result
+
+Rules:
+
+- no destructive cleanup without explicit dry-run report;
+- no silent overwrite of target defaults.
+
+## Web UI additions
+
+New enterprise view (`/enterprise`) extends MVP dashboard with:
+
+- migration matrix
+- domain module statuses
+- dependency graph
+- users mapping review queue
+- verification results
+- cleanup preview
+- delta readiness
+- entity mapping audit overview
+
+## CLI additions
+
+Core commands kept from baseline:
+
+- `b24-runtime create-job`
+- `b24-runtime plan`
+- `b24-runtime execute`
+- `b24-runtime status`
+- `b24-runtime checkpoint`
+- `b24-runtime report`
+- `b24-runtime verify`
+- `b24-runtime deployment:check`
+
+Enterprise extensions:
+
+- `matrix`
+- `domains`
+- `mappings`
+- `verify:results`
+- `cleanup:plan`
+- `cleanup:execute`
+- `delta:plan`
+- `delta:execute`
+- `cutover:readiness`
+
+## Docker/run
+
+Existing Docker setup remains valid (`docker compose up --build`). Enterprise additions are schema-compatible via new Alembic revision `0003_enterprise_mapping_and_verification`.
+
+Config keeps `runtime_mode` and **MySQL-only** production rule from baseline (`runtime_mode: production` + MySQL URL in production).
+
+## Testing
+
+New/updated tests include:
+
+- mapping upsert/list and user conflict policy
+- verification persistence/check API
+- new web API surfaces for matrix/mappings/review/cleanup/delta/cutover
+- existing CLI/web regression
+
+Run with:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -e .
+pytest
 ```
-
-Install developer/test extras when needed:
-
-```bash
-pip install -e .[dev]
-```
-
-## Configuration
-
-1. Copy template:
-
-```bash
-cp migration.config.yml.example migration.config.yml
-```
-
-2. Fill values (`migration.config.yml` example):
-
-```yaml
-runtime_mode: production
-database_url: mysql+pymysql://b24_user:b24_password@127.0.0.1:3306/b24_runtime
-source:
-  base_url: https://source.bitrix24.example
-  webhook: source_webhook_token
-target:
-  base_url: https://target.bitrix24.example
-  webhook: target_webhook_token
-default_scope:
-  - crm
-  - tasks
-```
-
-3. Optional env overrides:
-
-- `MIGRATION_RUNTIME_MODE`
-- `MIGRATION_DATABASE_URL`
-- `MIGRATION_SOURCE_BASE_URL`
-- `MIGRATION_SOURCE_WEBHOOK`
-- `MIGRATION_TARGET_BASE_URL`
-- `MIGRATION_TARGET_WEBHOOK`
-
-## CLI
-
-```bash
-# 1) Create a job
-b24-runtime create-job --config migration.config.yml
-
-# 2) Create plan for job
-b24-runtime plan --config migration.config.yml --job-id <job_id>
-
-# Backward-compatible shortcut: if --job-id is omitted, command creates a job automatically
-b24-runtime plan --config migration.config.yml
-
-# 3) Execute / inspect / resume
-b24-runtime execute --config migration.config.yml --plan-id <plan_id>
-b24-runtime status --config migration.config.yml --job-id <job_id>
-b24-runtime status --config migration.config.yml --plan-id <plan_id>
-b24-runtime status --config migration.config.yml --run-id <run_id>
-b24-runtime checkpoint --config migration.config.yml --run-id <run_id>
-b24-runtime report --config migration.config.yml --run-id <run_id>
-b24-runtime resume --config migration.config.yml --plan-id <plan_id>
-
-# Infra validation and compatibility alias
-b24-runtime deployment:check --config migration.config.yml
-b24-runtime verify --config migration.config.yml --run-id <run_id>
-```
-
-## Web UI
-
-Run locally:
-
-```bash
-uvicorn b24_migrator.web.app:app --host 127.0.0.1 --port 8000
-```
-
-Open: `http://127.0.0.1:8000/`
-
-Main endpoints:
-
-- `GET /health`
-- `GET /` (dashboard)
-- `GET /config`
-- `POST /config/test`
-- `POST /config/save`
-- `GET /jobs`, `POST /jobs`, `GET /jobs/{job_id}`
-- `POST /plans`, `GET /plans/{plan_id}`
-- `GET /runs`, `POST /runs/execute`, `POST /runs/resume`
-- `GET /runs/{run_id}`
-- `GET /runs/{run_id}/logs`
-- `GET /runs/{run_id}/report`
-- `GET /runs/{run_id}/checkpoint`
-- `GET /audit`
-
-Optional basic auth for web/API:
-
-- `B24_WEB_USERNAME`
-- `B24_WEB_PASSWORD`
-
-## Docker deployment
-
-1. Prepare env and config:
-
-```bash
-cp .env.example .env
-mkdir -p docker/config
-cp docker/config/migration.config.yml.example docker/config/migration.config.yml
-```
-
-2. Start stack:
-
-```bash
-docker compose up --build
-```
-
-3. Open:
-
-- Web UI: `http://127.0.0.1:18080/`
-- Adminer (optional): `http://127.0.0.1:18081/`
-- MariaDB: `127.0.0.1:13306`
-
-`docker-compose.yml` intentionally avoids port `15173` and uses `18080` by default.
-
-## Health, logs, report, audit
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/runs/<run_id>/logs
-curl http://127.0.0.1:8000/runs/<run_id>/report
-curl http://127.0.0.1:8000/audit
-```
-
-All commands/endpoints print structured JSON for automation.

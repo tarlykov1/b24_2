@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Enterprise migration control</h2>
+  <p>Dependency-driven migration with canonical mappings, conflict queue and cutover safety rails.</p>
+</section>
+
+<section class="card">
+  <h3>Supported migration matrix</h3>
+  <table>
+    <thead><tr><th>Entity</th><th>Status</th><th>Mapping</th><th>Verify</th><th>Delta</th><th>Cleanup</th></tr></thead>
+    <tbody>
+      {% for row in matrix %}
+      <tr><td>{{row.entity}}</td><td>{{row.supported_status}}</td><td>{{row.mapping_strategy}}</td><td>{{row.verification_strategy}}</td><td>{{row.delta_support}}</td><td>{{row.cleanup_support}}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>Domain modules</h3>
+    {% for d in domains %}
+      <div><strong>{{d.domain}}</strong>: discovery={{d.discovery}}, mapping={{d.mapping}}, migrate={{d.migrate}}, verify={{d.verify}}, delta={{d.delta_support_status}}</div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <h3>Dependency graph</h3>
+    {% for s in graph %}
+      <div>{{s.order}}. {{s.step}} {% if s.dependencies %}(deps: {{s.dependencies|join(', ')}}){% endif %}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>Users mapping review</h3>
+    {% if review_queue %}
+      {% for q in review_queue %}
+      <div>source {{q.source_id}} · {{q.reason}} · candidates {{q.candidates|length}}</div>
+      {% endfor %}
+    {% else %}
+      <div>No unresolved user conflicts.</div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3>Relation integrity / verification {% if selected_run_id %}(run {{selected_run_id}}){% endif %}</h3>
+    {% if verification_results %}
+      {% for r in verification_results %}
+      <div>{{r.check_type}} · {{r.entity_type}} · <span class="status {{r.status}}">{{r.status}}</span></div>
+      {% endfor %}
+    {% else %}
+      <div>No verification results yet.</div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>Cleanup preview</h3>
+    <div>mapped_total={{cleanup_preview.target_inspection.mapped_total}}, unresolved_total={{cleanup_preview.target_inspection.unresolved_total}}</div>
+    {% for action in cleanup_preview.cleanup_plan.actions %}
+      <div>{{action.entity}}: {{action.mode}}</div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <h3>Delta / cutover readiness</h3>
+    <div>delta strategy: {{delta_plan.strategy}}</div>
+    <div>resume_supported: {{delta_plan.resume_supported}}</div>
+    <div>steps: {{delta_plan.steps|length}}</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Entity-specific audit (recent mappings)</h3>
+  {% for m in mappings %}
+    <div>{{m.entity_type}}: {{m.source_id}} -> {{m.target_id or 'N/A'}} · {{m.status}} · {{m.resolution_strategy}}</div>
+  {% else %}
+    <div>No mapping records yet.</div>
+  {% endfor %}
+</section>
+{% endblock %}

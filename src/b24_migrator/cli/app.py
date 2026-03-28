@@ -222,3 +222,128 @@ def deployment_check_command(config: Path = typer.Option(Path("migration.config.
         _handle_error(exc)
     except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
+
+
+@app.command("matrix")
+def matrix_command(config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"matrix": container.service.list_matrix()}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("domains")
+def domains_command(config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={"domains": container.service.list_domain_modules(), "dependency_graph": container.service.get_dependency_graph()},
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("mappings")
+def mappings_command(
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+    entity_type: str | None = typer.Option(None, "--entity-type"),
+    status: str | None = typer.Option(None, "--status"),
+    limit: int = typer.Option(1000, "--limit"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        payload = [_asdict(i) for i in container.service.list_mappings(entity_type=entity_type, status=status, limit=limit)]
+        _emit(JsonResponse(ok=True, data={"mappings": payload}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("verify:results")
+def verify_results_command(
+    run_id: str = typer.Option(..., "--run-id"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"results": container.service.verification_results(run_id)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("cleanup:plan")
+def cleanup_plan_command(
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"cleanup_plan": container.service.cleanup_plan(dry_run=dry_run)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("cleanup:execute")
+def cleanup_execute_command(
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"cleanup_execute": container.service.cleanup_execute(dry_run=dry_run)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("delta:plan")
+def delta_plan_command(config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"delta_plan": container.service.delta_plan()}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("delta:execute")
+def delta_execute_command(
+    plan_id: str = typer.Option(..., "--plan-id"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"delta_execute": container.service.delta_execute(plan_id)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("cutover:readiness")
+def cutover_readiness_command(
+    run_id: str = typer.Option(..., "--run-id"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        _emit(JsonResponse(ok=True, data={"cutover_readiness": container.service.cutover_readiness(run_id)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)

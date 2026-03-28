@@ -10,9 +10,13 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from b24_migrator.config import RuntimeConfig, load_runtime_config
-from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, Plan, Run
+from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, MappingRecord, Plan, Run
 from b24_migrator.errors import AppError
+from b24_migrator.services.cutover import CutoverService
+from b24_migrator.services.domains import DomainRegistryService
 from b24_migrator.services.executor import ExecutionService
+from b24_migrator.services.mapping import MappingService, UserResolutionService
+from b24_migrator.services.matrix import MigrationMatrixService
 from b24_migrator.services.planner import PlannerService
 from b24_migrator.services.verifier import VerificationService
 from b24_migrator.storage.base import Base
@@ -21,8 +25,11 @@ from b24_migrator.storage.repositories import (
     CheckpointRepository,
     JobRepository,
     LogRepository,
+    MappingRepository,
     PlanRepository,
     RunRepository,
+    UserReviewQueueRepository,
+    VerificationResultRepository,
 )
 from b24_migrator.storage.session import SessionFactory
 
@@ -44,6 +51,11 @@ class RuntimeService:
         self.planner = PlannerService()
         self.executor = ExecutionService()
         self.verifier = VerificationService()
+        self.matrix = MigrationMatrixService()
+        self.mapping = MappingService()
+        self.user_resolution = UserResolutionService()
+        self.domain_registry = DomainRegistryService()
+        self.cutover = CutoverService()
 
     def ensure_schema(self) -> None:
         Base.metadata.create_all(self.session_factory.engine)
@@ -197,9 +209,18 @@ class RuntimeService:
                         break
             if run is None:
                 raise AppError("RUN_NOT_FOUND", "Run does not exist", {"run_id": run_id, "job_id": job_id})
-            report = self.verifier.verify_run(run)
+            mappings = MappingRepository(session).list_all(limit=5000)
+            report = self.verifier.verify_run(run, mappings)
+            verification_rows = self.verifier.build_results(run, mappings)
+            VerificationResultRepository(session).save_many(verification_rows)
             logs = log_repo.list_for_run(run.run_id)
-            return {"verification": report, "run": run, "logs": logs}
+            session.commit()
+            return {
+                "verification": report,
+                "verification_results": VerificationResultRepository(session).list_for_run(run.run_id),
+                "run": run,
+                "logs": logs,
+            }
 
     def get_checkpoint(self, *, run_id: str) -> dict[str, Any]:
         with self.session_factory.create_session() as session:
@@ -237,6 +258,67 @@ class RuntimeService:
     def list_audit(self, limit: int = 200) -> list[AuditEntry]:
         with self.session_factory.create_session() as session:
             return AuditRepository(session).list_recent(limit=limit)
+
+    def list_matrix(self) -> list[dict[str, Any]]:
+        return [to_dict(i) for i in self.matrix.list_entries()]
+
+    def list_domain_modules(self) -> list[dict[str, Any]]:
+        return [to_dict(i) for i in self.domain_registry.list_domains()]
+
+    def get_dependency_graph(self) -> list[dict[str, Any]]:
+        return [to_dict(i) for i in self.domain_registry.execution_graph()]
+
+    def upsert_mapping(self, actor: str = "system", **kwargs: Any) -> MappingRecord:
+        with self.session_factory.create_session() as session:
+            mapping = self.mapping.upsert_mapping(session, **kwargs)
+            self._audit(session, actor, "upsert_mapping", kwargs, "success", {"mapping": to_dict(mapping)})
+            session.commit()
+            return mapping
+
+    def list_mappings(self, entity_type: str | None = None, status: str | None = None, limit: int = 1000) -> list[MappingRecord]:
+        with self.session_factory.create_session() as session:
+            return MappingRepository(session).list_all(entity_type=entity_type, status=status, limit=limit)
+
+    def resolve_user_mapping(self, source_user: dict[str, Any], target_candidates: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            resolved = self.user_resolution.resolve_user(session, source_user=source_user, target_candidates=target_candidates)
+            details = to_dict(resolved)
+            self._audit(session, actor, "resolve_user_mapping", {"source_user": source_user}, "success", details)
+            session.commit()
+            return details
+
+    def list_user_review_queue(self, limit: int = 500) -> list[dict[str, Any]]:
+        with self.session_factory.create_session() as session:
+            return [to_dict(i) for i in UserReviewQueueRepository(session).list_open(limit=limit)]
+
+    def verification_results(self, run_id: str) -> list[dict[str, Any]]:
+        with self.session_factory.create_session() as session:
+            return [to_dict(r) for r in VerificationResultRepository(session).list_for_run(run_id)]
+
+    def target_inspection(self) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            mappings = MappingRepository(session).list_all(limit=5000)
+            return self.cutover.target_inspection(mappings)
+
+    def cleanup_plan(self, dry_run: bool = True) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            mappings = MappingRepository(session).list_all(limit=5000)
+            return self.cutover.cleanup_plan(mappings, dry_run=dry_run)
+
+    def cleanup_execute(self, dry_run: bool = True) -> dict[str, Any]:
+        plan = self.cleanup_plan(dry_run=True)
+        return self.cutover.cleanup_execute(plan, dry_run=dry_run)
+
+    def delta_plan(self) -> dict[str, Any]:
+        return self.cutover.delta_plan(self.domain_registry.execution_graph())
+
+    def delta_execute(self, plan_id: str) -> dict[str, Any]:
+        return self.cutover.delta_execute(plan_id)
+
+    def cutover_readiness(self, run_id: str) -> dict[str, Any]:
+        inspection = self.target_inspection()
+        verification = self.get_report(run_id=run_id)["verification"]
+        return self.cutover.cutover_readiness(inspection, verification)
 
     def _persist_run_result(self, session: Any, result: Run, log_message: str) -> None:
         RunRepository(session).save(result)
@@ -287,24 +369,31 @@ def to_dict(value: Any) -> dict[str, Any]:
         return asdict(value)
     if isinstance(value, dict):
         return dict(value)
-    return value.__dict__.copy()
+    raise TypeError(f"Unsupported audit payload type: {type(value)!r}")
 
 
 def safe_database_details(database_url: str) -> dict[str, Any]:
     parsed = make_url(database_url)
+    dsn_password = "***" if parsed.password else ""
+    auth = ""
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password is not None:
+            auth = f"{auth}:{dsn_password}"
+        auth = f"{auth}@"
+    host = parsed.host or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    dsn = f"{parsed.drivername}://{auth}{host}{port}/{parsed.database or ''}"
     return {
-        "driver": parsed.drivername,
+        "drivername": parsed.drivername,
         "host": parsed.host,
         "port": parsed.port,
         "database": parsed.database,
         "username": parsed.username,
-        "dsn": parsed.render_as_string(hide_password=True),
+        "password": "***" if parsed.password else None,
+        "dsn": dsn,
     }
 
 
-def save_config(config_path: Path, config: RuntimeConfig) -> None:
-    import yaml
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(config.model_dump(mode="python"), fh, allow_unicode=True, sort_keys=False)
+def save_config(path: Path, config: RuntimeConfig) -> None:
+    path.write_text(config.model_dump_json(indent=2), encoding="utf-8")

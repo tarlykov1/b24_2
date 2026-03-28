@@ -147,3 +147,29 @@ def test_status_requires_identifier(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["error_code"] == "VALIDATION_MISSING_IDENTIFIER"
+
+
+def test_enterprise_cli_surfaces(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    plan_payload = json.loads(runner.invoke(app, ["plan", "--config", str(config_path)]).stdout)
+    plan_id = plan_payload["data"]["plan"]["plan_id"]
+    run_id = json.loads(runner.invoke(app, ["execute", "--config", str(config_path), "--plan-id", plan_id]).stdout)["data"]["run"]["run_id"]
+
+    matrix = runner.invoke(app, ["matrix", "--config", str(config_path)])
+    assert matrix.exit_code == ExitCode.SUCCESS
+    assert len(json.loads(matrix.stdout)["data"]["matrix"]) >= 10
+
+    domains = runner.invoke(app, ["domains", "--config", str(config_path)])
+    assert domains.exit_code == ExitCode.SUCCESS
+
+    cleanup = runner.invoke(app, ["cleanup:plan", "--config", str(config_path)])
+    assert cleanup.exit_code == ExitCode.SUCCESS
+    assert json.loads(cleanup.stdout)["data"]["cleanup_plan"]["dry_run"] is True
+
+    delta = runner.invoke(app, ["delta:plan", "--config", str(config_path)])
+    assert delta.exit_code == ExitCode.SUCCESS
+
+    # populate verification rows first
+    runner.invoke(app, ["report", "--config", str(config_path), "--run-id", run_id])
+    verify_rows = runner.invoke(app, ["verify:results", "--config", str(config_path), "--run-id", run_id])
+    assert verify_rows.exit_code == ExitCode.SUCCESS
