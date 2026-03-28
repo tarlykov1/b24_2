@@ -61,6 +61,19 @@ class LogEntry:
     created_at: datetime
 
 
+@dataclass(slots=True, frozen=True)
+class AuditEntry:
+    """Audit entry for user-triggered actions."""
+
+    audit_id: int | None
+    actor: str
+    action: str
+    input_payload: dict[str, Any]
+    outcome: str
+    details: dict[str, Any] | None
+    created_at: datetime
+
+
 # Backward-compatible aliases used across existing services/tests.
 MigrationPlan = Plan
 ExecutionResult = Run

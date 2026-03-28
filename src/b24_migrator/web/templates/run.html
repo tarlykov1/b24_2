@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" hx-get="/runs/{{run.run_id}}/view" hx-trigger="every 4s" hx-swap="outerHTML">
+<h2>Run {{run.run_id}}</h2>
+<div>Status: <span class="status {{run.status|lower}}">{{run.status}}</span></div>
+<div>Processed: {{run.processed_items}}</div>
+<div class="progress"><div style="width: {{ [run.processed_items * 10, 100]|min }}%"></div></div>
+<div>Checkpoint: {{checkpoint.checkpoint_token}}</div>
+<h3>Logs</h3>
+{% for log in logs %}<div>[{{log.level}}] {{log.message}}</div>{% endfor %}
+</section>
+{% endblock %}
