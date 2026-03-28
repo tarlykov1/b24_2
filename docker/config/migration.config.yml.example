@@ -1,0 +1,11 @@
+runtime_mode: production
+database_url: mysql+pymysql://b24_user:b24_password@db:3306/b24_runtime
+source:
+  base_url: https://source.bitrix24.example
+  webhook: source_webhook
+target:
+  base_url: https://target.bitrix24.example
+  webhook: target_webhook
+default_scope:
+  - crm
+  - tasks

@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      MIGRATION_CONFIG_PATH: /config/migration.config.yml
+    ports:
+      - "127.0.0.1:18080:8000"
+    volumes:
+      - ./docker/config:/config
+    restart: unless-stopped
+
+  db:
+    image: mariadb:11
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-b24_runtime}
+      MYSQL_USER: ${MYSQL_USER:-b24_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-b24_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+    volumes:
+      - b24_db_data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:13306:3306"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    depends_on:
+      - db
+    ports:
+      - "127.0.0.1:18081:8080"
+    restart: unless-stopped
+
+volumes:
+  b24_db_data:

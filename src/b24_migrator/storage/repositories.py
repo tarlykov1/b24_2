@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from b24_migrator.domain.models import Checkpoint, Job, LogEntry, Plan, Run
-from b24_migrator.storage.models import CheckpointRecord, JobRecord, LogRecord, PlanRecord, RunRecord
+from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, Plan, Run
+from b24_migrator.storage.models import AuditRecord, CheckpointRecord, JobRecord, LogRecord, PlanRecord, RunRecord
 
 
 class JobRepository:
@@ -36,6 +36,19 @@ class JobRepository:
             target_portal=record.target_portal,
             created_at=record.created_at,
         )
+
+    def list_recent(self, limit: int = 20) -> list[Job]:
+        stmt = select(JobRecord).order_by(JobRecord.created_at.desc()).limit(limit)
+        rows = self._session.execute(stmt).scalars().all()
+        return [
+            Job(
+                job_id=row.job_id,
+                source_portal=row.source_portal,
+                target_portal=row.target_portal,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
 
 
 class PlanRepository:
@@ -87,6 +100,22 @@ class PlanRepository:
             for row in rows
         ]
 
+    def list_recent(self, limit: int = 50) -> list[Plan]:
+        stmt = select(PlanRecord).order_by(PlanRecord.created_at.desc()).limit(limit)
+        rows = self._session.execute(stmt).scalars().all()
+        return [
+            Plan(
+                plan_id=row.plan_id,
+                job_id=row.job_id,
+                source_portal=row.source_portal,
+                target_portal=row.target_portal,
+                scope=row.scope_csv.split(",") if row.scope_csv else [],
+                deterministic_hash=row.deterministic_hash,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
 
 class RunRepository:
     """Persistence layer for migration executions."""
@@ -119,12 +148,7 @@ class RunRepository:
         )
 
     def find_latest_for_plan(self, plan_id: str) -> Run | None:
-        stmt = (
-            select(RunRecord)
-            .where(RunRecord.plan_id == plan_id)
-            .order_by(RunRecord.updated_at.desc())
-            .limit(1)
-        )
+        stmt = select(RunRecord).where(RunRecord.plan_id == plan_id).order_by(RunRecord.updated_at.desc()).limit(1)
         record = self._session.execute(stmt).scalar_one_or_none()
         if record is None:
             return None
@@ -135,6 +159,23 @@ class RunRepository:
             processed_items=record.processed_items,
             checkpoint_token=record.checkpoint_token,
         )
+
+    def list_recent(self, limit: int = 50, status: str | None = None) -> list[Run]:
+        stmt = select(RunRecord)
+        if status:
+            stmt = stmt.where(RunRecord.status == status)
+        stmt = stmt.order_by(RunRecord.updated_at.desc()).limit(limit)
+        rows = self._session.execute(stmt).scalars().all()
+        return [
+            Run(
+                plan_id=row.plan_id,
+                run_id=row.run_id,
+                status=row.status,
+                processed_items=row.processed_items,
+                checkpoint_token=row.checkpoint_token,
+            )
+            for row in rows
+        ]
 
 
 class CheckpointRepository:
@@ -188,8 +229,11 @@ class LogRepository:
             )
         )
 
-    def list_for_run(self, run_id: str) -> list[LogEntry]:
-        stmt = select(LogRecord).where(LogRecord.run_id == run_id).order_by(LogRecord.created_at.asc(), LogRecord.log_id.asc())
+    def list_for_run(self, run_id: str, level: str | None = None) -> list[LogEntry]:
+        stmt = select(LogRecord).where(LogRecord.run_id == run_id)
+        if level:
+            stmt = stmt.where(LogRecord.level == level)
+        stmt = stmt.order_by(LogRecord.created_at.asc(), LogRecord.log_id.asc())
         records = self._session.execute(stmt).scalars().all()
         return [
             LogEntry(
@@ -200,4 +244,39 @@ class LogRepository:
                 created_at=row.created_at,
             )
             for row in records
+        ]
+
+
+class AuditRepository:
+    """Persistence layer for user action audit."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save(self, entry: AuditEntry) -> None:
+        self._session.add(
+            AuditRecord(
+                actor=entry.actor,
+                action=entry.action,
+                input_payload_json=json.dumps(entry.input_payload, sort_keys=True, default=str),
+                outcome=entry.outcome,
+                details_json=json.dumps(entry.details, sort_keys=True, default=str) if entry.details is not None else None,
+                created_at=entry.created_at,
+            )
+        )
+
+    def list_recent(self, limit: int = 200) -> list[AuditEntry]:
+        stmt = select(AuditRecord).order_by(AuditRecord.created_at.desc(), AuditRecord.audit_id.desc()).limit(limit)
+        rows = self._session.execute(stmt).scalars().all()
+        return [
+            AuditEntry(
+                audit_id=row.audit_id,
+                actor=row.actor,
+                action=row.action,
+                input_payload=json.loads(row.input_payload_json),
+                outcome=row.outcome,
+                details=json.loads(row.details_json) if row.details_json else None,
+                created_at=row.created_at,
+            )
+            for row in rows
         ]

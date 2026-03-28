@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Quick actions</h2>
+  <form hx-post="/config/test" hx-target="#result" hx-swap="innerHTML"><button>Проверить deployment</button></form>
+  <form hx-post="/jobs" hx-target="#result" hx-swap="innerHTML"><button>Создать job</button></form>
+  <form hx-post="/plans" hx-target="#result" hx-swap="innerHTML"><button>Построить plan</button></form>
+</section>
+<pre id="result" class="card">{}</pre>
+<section class="grid">
+  <div class="card"><h3>Jobs</h3>{% for job in jobs %}<div>{{job.job_id}} · {{job.created_at}}</div>{% endfor %}</div>
+  <div class="card"><h3>Plans</h3>{% for plan in plans %}<div>{{plan.plan_id}} · hash {{plan.deterministic_hash[:12]}}</div>{% endfor %}</div>
+  <div class="card"><h3>Runs</h3>{% for run in runs %}<div><a href="/runs/{{run.run_id}}/view">{{run.run_id}}</a> · <span class="status {{run.status|lower}}">{{run.status}}</span> · {{run.processed_items}}</div>{% endfor %}</div>
+</section>
+<section class="card">
+<h3>Recent audit</h3>
+{% for row in audit %}<div>{{row.created_at}} · {{row.actor}} · {{row.action}} · {{row.outcome}}</div>{% endfor %}
+</section>
+<section class="card">
+<h3>Last errors</h3>
+{% if last_errors %}{% for e in last_errors %}<div>{{e.created_at}} [{{e.level}}] {{e.message}}</div>{% endfor %}{% else %}<div>No errors</div>{% endif %}
+</section>
+{% endblock %}
