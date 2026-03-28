@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,96 @@ def list_audit(svc: RuntimeService = Depends(get_runtime_service), limit: int = 
     return {"ok": True, "data": {"audit": _serialize(svc.list_audit(limit=limit))}}
 
 
+@router.get("/matrix")
+def migration_matrix(svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"matrix": svc.list_matrix()}}
+
+
+@router.get("/domains")
+def domain_modules(svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"domains": svc.list_domain_modules(), "dependency_graph": svc.get_dependency_graph()}}
+
+
+@router.get("/mappings")
+def list_mappings(
+    svc: RuntimeService = Depends(get_runtime_service),
+    entity_type: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=1000, ge=1, le=5000),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"mappings": _serialize(svc.list_mappings(entity_type=entity_type, status=status_filter, limit=limit))}}
+
+
+@router.post("/users/resolve")
+def resolve_user_mapping(
+    source_user_json: str = Form(...),
+    target_candidates_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    source_user = _parse_json_form(source_user_json, "source_user_json")
+    target_candidates = _parse_json_form(target_candidates_json, "target_candidates_json")
+    if not isinstance(target_candidates, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_candidates_json must be a JSON list")
+    return {"ok": True, "data": {"result": svc.resolve_user_mapping(source_user, target_candidates, actor=actor)}}
+
+
+@router.get("/users/review")
+def user_review_queue(svc: RuntimeService = Depends(get_runtime_service), limit: int = Query(default=500, ge=1, le=5000)) -> dict[str, Any]:
+    return {"ok": True, "data": {"queue": svc.list_user_review_queue(limit=limit)}}
+
+
+@router.get("/verification/{run_id}")
+def verification_results(run_id: str, svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"results": svc.verification_results(run_id)}}
+
+
+@router.get("/cleanup/preview")
+def cleanup_preview(svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"target_inspection": svc.target_inspection(), "cleanup_plan": svc.cleanup_plan(dry_run=True)}}
+
+
+@router.post("/cleanup/execute")
+def cleanup_execute(dry_run: bool = Form(default=True), svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"cleanup_execute": svc.cleanup_execute(dry_run=dry_run)}}
+
+
+@router.get("/delta")
+def delta_plan(svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"delta_plan": svc.delta_plan()}}
+
+
+@router.post("/delta/execute")
+def delta_execute(plan_id: str = Form(...), svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"delta_execute": svc.delta_execute(plan_id)}}
+
+
+@router.get("/cutover/{run_id}")
+def cutover_readiness(run_id: str, svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
+    return {"ok": True, "data": {"cutover_readiness": svc.cutover_readiness(run_id)}}
+
+
+@router.get("/enterprise", response_class=HTMLResponse)
+def enterprise_view(request: Request, svc: RuntimeService = Depends(get_runtime_service), templates: Jinja2Templates = Depends(get_templates)):
+    runs = svc.list_runs(limit=10)
+    selected_run_id = runs[0].run_id if runs else None
+    return templates.TemplateResponse(
+        request,
+        "enterprise.html",
+        {
+            "matrix": svc.list_matrix(),
+            "domains": svc.list_domain_modules(),
+            "graph": svc.get_dependency_graph(),
+            "mappings": [asdict(row) for row in svc.list_mappings(limit=30)],
+            "review_queue": svc.list_user_review_queue(limit=30),
+            "cleanup_preview": {"target_inspection": svc.target_inspection(), "cleanup_plan": svc.cleanup_plan(dry_run=True)},
+            "delta_plan": svc.delta_plan(),
+            "verification_results": svc.verification_results(selected_run_id) if selected_run_id else [],
+            "selected_run_id": selected_run_id,
+        },
+    )
+
+
 @router.get("/runs/{run_id}/view", response_class=HTMLResponse)
 def run_view(request: Request, run_id: str, svc: RuntimeService = Depends(get_runtime_service), templates: Jinja2Templates = Depends(get_templates)):
     data = get_run(run_id, svc)
@@ -211,3 +302,10 @@ def _mask_secret(raw: str) -> str:
     if len(raw) <= 6:
         return "***"
     return f"{raw[:3]}***{raw[-2:]}"
+
+
+def _parse_json_form(raw: str, field: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON in {field}") from exc

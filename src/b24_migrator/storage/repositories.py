@@ -6,8 +6,18 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, Plan, Run
-from b24_migrator.storage.models import AuditRecord, CheckpointRecord, JobRecord, LogRecord, PlanRecord, RunRecord
+from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, MappingRecord, Plan, Run, UserReviewItem, VerificationResult
+from b24_migrator.storage.models import (
+    AuditRecord,
+    CheckpointRecord,
+    JobRecord,
+    LogRecord,
+    MappingRecordModel,
+    PlanRecord,
+    RunRecord,
+    UserReviewQueueRecord,
+    VerificationResultRecord,
+)
 
 
 class JobRepository:
@@ -276,6 +286,185 @@ class AuditRepository:
                 input_payload=json.loads(row.input_payload_json),
                 outcome=row.outcome,
                 details=json.loads(row.details_json) if row.details_json else None,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
+
+class MappingRepository:
+    """Persistence layer for canonical source-target mapping rows."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(self, mapping: MappingRecord) -> None:
+        existing = self._session.execute(
+            select(MappingRecordModel).where(
+                MappingRecordModel.entity_type == mapping.entity_type,
+                MappingRecordModel.source_id == mapping.source_id,
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            self._session.add(
+                MappingRecordModel(
+                    entity_type=mapping.entity_type,
+                    source_id=mapping.source_id,
+                    source_uid=mapping.source_uid,
+                    target_id=mapping.target_id,
+                    target_uid=mapping.target_uid,
+                    status=mapping.status,
+                    resolution_strategy=mapping.resolution_strategy,
+                    verification_status=mapping.verification_status,
+                    linked_parent_type=mapping.linked_parent_type,
+                    linked_parent_source_id=mapping.linked_parent_source_id,
+                    linked_parent_target_id=mapping.linked_parent_target_id,
+                    payload_hash=mapping.payload_hash,
+                    error_payload_json=json.dumps(mapping.error_payload, sort_keys=True) if mapping.error_payload else None,
+                    created_at=mapping.created_at,
+                    updated_at=mapping.updated_at,
+                )
+            )
+            return
+        existing.source_uid = mapping.source_uid
+        existing.target_id = mapping.target_id
+        existing.target_uid = mapping.target_uid
+        existing.status = mapping.status
+        existing.resolution_strategy = mapping.resolution_strategy
+        existing.verification_status = mapping.verification_status
+        existing.linked_parent_type = mapping.linked_parent_type
+        existing.linked_parent_source_id = mapping.linked_parent_source_id
+        existing.linked_parent_target_id = mapping.linked_parent_target_id
+        existing.payload_hash = mapping.payload_hash
+        existing.error_payload_json = json.dumps(mapping.error_payload, sort_keys=True) if mapping.error_payload else None
+        existing.updated_at = mapping.updated_at
+
+    def list_all(self, entity_type: str | None = None, status: str | None = None, limit: int = 1000) -> list[MappingRecord]:
+        stmt = select(MappingRecordModel)
+        if entity_type:
+            stmt = stmt.where(MappingRecordModel.entity_type == entity_type)
+        if status:
+            stmt = stmt.where(MappingRecordModel.status == status)
+        stmt = stmt.order_by(MappingRecordModel.updated_at.desc(), MappingRecordModel.mapping_id.desc()).limit(limit)
+        rows = self._session.execute(stmt).scalars().all()
+        return [self._to_domain(row) for row in rows]
+
+    def get(self, entity_type: str, source_id: str) -> MappingRecord | None:
+        row = self._session.execute(
+            select(MappingRecordModel).where(
+                MappingRecordModel.entity_type == entity_type,
+                MappingRecordModel.source_id == source_id,
+            )
+        ).scalar_one_or_none()
+        return self._to_domain(row) if row else None
+
+    @staticmethod
+    def _to_domain(row: MappingRecordModel) -> MappingRecord:
+        return MappingRecord(
+            mapping_id=row.mapping_id,
+            entity_type=row.entity_type,
+            source_id=row.source_id,
+            source_uid=row.source_uid,
+            target_id=row.target_id,
+            target_uid=row.target_uid,
+            status=row.status,
+            resolution_strategy=row.resolution_strategy,
+            verification_status=row.verification_status,
+            linked_parent_type=row.linked_parent_type,
+            linked_parent_source_id=row.linked_parent_source_id,
+            linked_parent_target_id=row.linked_parent_target_id,
+            payload_hash=row.payload_hash,
+            error_payload=json.loads(row.error_payload_json) if row.error_payload_json else None,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+class UserReviewQueueRepository:
+    """Persistence for user match ambiguities/manual review queue."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save(self, item: UserReviewItem) -> None:
+        if item.review_id is not None:
+            row = self._session.get(UserReviewQueueRecord, item.review_id)
+            if row is not None:
+                row.source_id = item.source_id
+                row.source_uid = item.source_uid
+                row.candidates_json = json.dumps(item.candidates, sort_keys=True)
+                row.reason = item.reason
+                row.status = item.status
+                row.updated_at = item.updated_at
+                return
+        self._session.add(
+            UserReviewQueueRecord(
+                source_id=item.source_id,
+                source_uid=item.source_uid,
+                candidates_json=json.dumps(item.candidates, sort_keys=True),
+                reason=item.reason,
+                status=item.status,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+        )
+
+    def list_open(self, limit: int = 500) -> list[UserReviewItem]:
+        rows = self._session.execute(
+            select(UserReviewQueueRecord)
+            .where(UserReviewQueueRecord.status == "open")
+            .order_by(UserReviewQueueRecord.created_at.asc(), UserReviewQueueRecord.review_id.asc())
+            .limit(limit)
+        ).scalars().all()
+        return [self._to_domain(row) for row in rows]
+
+    @staticmethod
+    def _to_domain(row: UserReviewQueueRecord) -> UserReviewItem:
+        return UserReviewItem(
+            review_id=row.review_id,
+            source_id=row.source_id,
+            source_uid=row.source_uid,
+            candidates=json.loads(row.candidates_json),
+            reason=row.reason,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+class VerificationResultRepository:
+    """Persistence for verification check output."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save_many(self, rows: list[VerificationResult]) -> None:
+        for row in rows:
+            self._session.add(
+                VerificationResultRecord(
+                    run_id=row.run_id,
+                    check_type=row.check_type,
+                    entity_type=row.entity_type,
+                    status=row.status,
+                    details_json=json.dumps(row.details, sort_keys=True, default=str),
+                    created_at=row.created_at,
+                )
+            )
+
+    def list_for_run(self, run_id: str) -> list[VerificationResult]:
+        rows = self._session.execute(
+            select(VerificationResultRecord)
+            .where(VerificationResultRecord.run_id == run_id)
+            .order_by(VerificationResultRecord.created_at.asc(), VerificationResultRecord.result_id.asc())
+        ).scalars().all()
+        return [
+            VerificationResult(
+                result_id=row.result_id,
+                run_id=row.run_id,
+                check_type=row.check_type,
+                entity_type=row.entity_type,
+                status=row.status,
+                details=json.loads(row.details_json),
                 created_at=row.created_at,
             )
             for row in rows

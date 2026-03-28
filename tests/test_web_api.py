@@ -71,3 +71,43 @@ def test_config_save_and_test(tmp_path: Path) -> None:
     saved = client.post("/config/save", data=save_payload)
     assert saved.status_code == 200
     assert saved.json()["data"]["saved"] is True
+
+
+def test_enterprise_endpoints(tmp_path: Path) -> None:
+    app = create_app(str(_write_config(tmp_path)))
+    client = TestClient(app)
+
+    plan = client.post("/plans").json()["data"]["plan"]
+    run = client.post("/runs/execute", data={"plan_id": plan["plan_id"], "dry_run": "false"}).json()["data"]["run"]
+
+    matrix = client.get("/matrix")
+    assert matrix.status_code == 200
+    assert len(matrix.json()["data"]["matrix"]) >= 10
+
+    domains = client.get("/domains")
+    assert domains.status_code == 200
+    assert len(domains.json()["data"]["dependency_graph"]) == 11
+
+    mapped = client.get("/mappings")
+    assert mapped.status_code == 200
+
+    preview = client.get("/cleanup/preview")
+    assert preview.status_code == 200
+    assert preview.json()["data"]["cleanup_plan"]["dry_run"] is True
+
+    delta = client.get("/delta")
+    assert delta.status_code == 200
+    assert delta.json()["data"]["delta_plan"]["resume_supported"] is True
+
+    report = client.get(f"/runs/{run['run_id']}/report")
+    assert report.status_code == 200
+
+    verify_rows = client.get(f"/verification/{run['run_id']}")
+    assert verify_rows.status_code == 200
+
+    cutover = client.get(f"/cutover/{run['run_id']}")
+    assert cutover.status_code == 200
+    assert "ready" in cutover.json()["data"]["cutover_readiness"]
+
+    enterprise = client.get("/enterprise")
+    assert enterprise.status_code == 200
