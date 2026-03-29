@@ -1,23 +1,86 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-  <h2>Quick actions</h2>
-  <form hx-post="/config/test" hx-target="#result" hx-swap="innerHTML"><button>Проверить deployment</button></form>
-  <form hx-post="/jobs" hx-target="#result" hx-swap="innerHTML"><button>Создать job</button></form>
-  <form hx-post="/plans" hx-target="#result" hx-swap="innerHTML"><button>Построить plan</button></form>
+  <h2>Быстрые действия</h2>
+  <form hx-post="/config/test" hx-target="#result" hx-swap="innerHTML"><button>Проверить готовность</button></form>
+  <form hx-post="/jobs" hx-target="#result" hx-swap="innerHTML"><button>Создать задание</button></form>
+  <form hx-post="/plans" hx-target="#result" hx-swap="innerHTML"><button>Построить план</button></form>
 </section>
 <pre id="result" class="card">{}</pre>
+
+<section class="card">
+  <h2>Пошаговый запуск миграции</h2>
+  <ol>
+    <li>Проверить конфигурацию (POST /config/test)
+      <form hx-post="/config/test" hx-target="#result" hx-swap="innerHTML"><button>Проверить готовность</button></form>
+    </li>
+    <li>Создать job (POST /jobs)
+      <form hx-post="/jobs" hx-target="#result" hx-swap="innerHTML"><button>Создать задание</button></form>
+    </li>
+    <li>Построить план (POST /plans)
+      <form hx-post="/plans" hx-target="#result" hx-swap="innerHTML"><button>Построить план</button></form>
+    </li>
+    <li>Запустить dry-run (POST /runs/execute, dry_run=true)
+      <form hx-post="/runs/execute" hx-target="#result" hx-swap="innerHTML">
+        <input type="text" name="plan_id" placeholder="plan_id" value="{{latest_plan.plan_id if latest_plan else ''}}" required />
+        <input type="hidden" name="dry_run" value="true" />
+        <button>Запустить dry-run</button>
+      </form>
+    </li>
+    <li>Посмотреть отчёт (/runs/{id}/report)
+      <form hx-get="/runs/{{latest_run.run_id if latest_run else ''}}/report" hx-target="#result" hx-swap="innerHTML">
+        <button {% if not latest_run %}disabled{% endif %}>Открыть отчёт</button>
+      </form>
+    </li>
+    <li>Запустить реальную миграцию (POST /runs/execute)
+      <form hx-post="/runs/execute" hx-target="#result" hx-swap="innerHTML">
+        <input type="text" name="plan_id" placeholder="plan_id" value="{{latest_plan.plan_id if latest_plan else ''}}" required />
+        <button>Запустить миграцию</button>
+      </form>
+    </li>
+    <li>Продолжить выполнение (POST /runs/resume)
+      <form hx-post="/runs/resume" hx-target="#result" hx-swap="innerHTML">
+        <input type="text" name="run_id" placeholder="run_id" value="{{latest_run.run_id if latest_run else ''}}" />
+        <button>Продолжить выполнение</button>
+      </form>
+    </li>
+    <li>Верификация (/verification/{run_id})
+      <form hx-get="/verification/{{latest_run.run_id if latest_run else ''}}" hx-target="#result" hx-swap="innerHTML">
+        <button {% if not latest_run %}disabled{% endif %}>Проверить верификацию</button>
+      </form>
+    </li>
+    <li>Cutover readiness (/cutover/{run_id})
+      <form hx-get="/cutover/{{latest_run.run_id if latest_run else ''}}" hx-target="#result" hx-swap="innerHTML">
+        <button {% if not latest_run %}disabled{% endif %}>Продолжить выполнение</button>
+      </form>
+    </li>
+  </ol>
+</section>
+
 <section class="grid">
-  <div class="card"><h3>Jobs</h3>{% for job in jobs %}<div>{{job.job_id}} · {{job.created_at}}</div>{% endfor %}</div>
-  <div class="card"><h3>Plans</h3>{% for plan in plans %}<div>{{plan.plan_id}} · hash {{plan.deterministic_hash[:12]}}</div>{% endfor %}</div>
-  <div class="card"><h3>Runs</h3>{% for run in runs %}<div><a href="/runs/{{run.run_id}}/view">{{run.run_id}}</a> · <span class="status {{run.status|lower}}">{{run.status}}</span> · {{run.processed_items}}</div>{% endfor %}</div>
+  <div class="card"><h3>Задания</h3>{% for job in jobs %}<div>{{job.job_id}} · {{job.created_at}}</div>{% endfor %}</div>
+  <div class="card"><h3>Планы</h3>{% for plan in plans %}<div>{{plan.plan_id}} · hash {{plan.deterministic_hash[:12]}}</div>{% endfor %}</div>
+  <div class="card"><h3>Запуски</h3>{% for run in runs %}<div><a href="/runs/{{run.run_id}}/view">{{run.run_id}}</a> · <span class="status {{run.status|lower}}">{{run.status}}</span> · {{run.processed_items}}</div>{% endfor %}</div>
 </section>
 <section class="card">
-<h3>Recent audit</h3>
+<h3>Текущий статус</h3>
+<div>Последний job: {{latest_job.job_id if latest_job else "—"}}</div>
+<div>Последний plan: {{latest_plan.plan_id if latest_plan else "—"}}</div>
+<div>Последний run: {{latest_run.run_id if latest_run else "—"}}</div>
+<div>Статус run: <span class="status {{latest_run.status|lower if latest_run else ''}}">{{latest_run.status if latest_run else "—"}}</span></div>
+</section>
+<section class="card">
+<h3>Проблемы</h3>
+<div>unresolved users: {{unresolved_users_count}}</div>
+<div>ambiguous users: {{ambiguous_users_count}}</div>
+<div>CRM errors: {{crm_errors_count}}</div>
+</section>
+<section class="card">
+<h3>Последний аудит</h3>
 {% for row in audit %}<div>{{row.created_at}} · {{row.actor}} · {{row.action}} · {{row.outcome}}</div>{% endfor %}
 </section>
 <section class="card">
-<h3>Last errors</h3>
-{% if last_errors %}{% for e in last_errors %}<div>{{e.created_at}} [{{e.level}}] {{e.message}}</div>{% endfor %}{% else %}<div>No errors</div>{% endif %}
+<h3>Последние ошибки</h3>
+{% if last_errors %}{% for e in last_errors %}<div>{{e.created_at}} [{{e.level}}] {{e.message}}</div>{% endfor %}{% else %}<div>Ошибок нет</div>{% endif %}
 </section>
 {% endblock %}

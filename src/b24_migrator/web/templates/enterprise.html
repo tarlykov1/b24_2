@@ -1,20 +1,53 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-  <h2>Enterprise migration control</h2>
-  <p>Dependency-driven migration with canonical mappings, conflict queue and cutover safety rails.</p>
+  <h2>Расширенный контроль миграции</h2>
+  <p>Управление зависимостями, маппингами и безопасным cutover.</p>
   {% if users_blocking_execution %}
-  <p><strong>Execution blocked:</strong> unresolved/ambiguous user mappings must be reviewed before dependent domains run safely.</p>
+  <p><strong>Выполнение заблокировано:</strong> unresolved/ambiguous user mappings нужно разобрать до запуска зависимых доменов.</p>
   {% endif %}
   {% if crm_blocking_execution %}
-  <p><strong>CRM blocked:</strong> unresolved CRM references detected (stage/category/user/company/contact/custom field dependencies).</p>
+  <p><strong>CRM заблокирован:</strong> обнаружены unresolved CRM references (stage/category/user/company/contact/custom field).</p>
   {% endif %}
 </section>
 
 <section class="card">
-  <h3>Supported migration matrix</h3>
+  <h3>Статус маппинга</h3>
+  <div>unresolved users={{unresolved_users|length}}, ambiguous users={{ambiguous_users|length}}, review queue={{review_queue|length}}</div>
+</section>
+
+<section class="card">
+  <h3>Пользователи, блокирующие выполнение</h3>
+  <div>unresolved={{unresolved_users|length}}, ambiguous={{ambiguous_users|length}}</div>
+  {% if review_queue %}
+    {% for q in review_queue %}
+    <div>source {{q.source_id}} · {{q.reason}} · candidates {{q.candidates|length}}</div>
+    {% endfor %}
+  {% else %}
+    <div>Неразрешённых пользовательских конфликтов нет.</div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h3>CRM-блокеры выполнения</h3>
+  {% for r in unresolved_crm %}
+    <div>{{r.entity_type}}: {{r.source_id}} · {{r.status}} · {{r.resolution_strategy}}</div>
+  {% else %}
+    <div>Неразрешённых CRM ссылок нет.</div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Граф зависимостей</h3>
+  {% for s in graph %}
+    <div>{{s.order}}. {{s.step}} {% if s.dependencies %}(deps: {{s.dependencies|join(', ')}}){% endif %}</div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Матрица поддерживаемой миграции</h3>
   <table>
-    <thead><tr><th>Entity</th><th>Status</th><th>Mapping</th><th>Verify</th><th>Delta</th><th>Cleanup</th></tr></thead>
+    <thead><tr><th>Сущность</th><th>Статус</th><th>Маппинг</th><th>Проверка</th><th>Дельта</th><th>Очистка</th></tr></thead>
     <tbody>
       {% for row in matrix %}
       <tr><td>{{row.entity}}</td><td>{{row.supported_status}}</td><td>{{row.mapping_strategy}}</td><td>{{row.verification_strategy}}</td><td>{{row.delta_support}}</td><td>{{row.cleanup_support}}</td></tr>
@@ -25,85 +58,65 @@
 
 <section class="grid">
   <div class="card">
-    <h3>Domain modules</h3>
+    <h3>Модули доменов</h3>
     {% for d in domains %}
       <div><strong>{{d.domain}}</strong>: discovery={{d.discovery}}, mapping={{d.mapping}}, migrate={{d.migrate}}, verify={{d.verify}}, delta={{d.delta_support_status}}</div>
     {% endfor %}
   </div>
   <div class="card">
-    <h3>Dependency graph</h3>
-    {% for s in graph %}
-      <div>{{s.order}}. {{s.step}} {% if s.dependencies %}(deps: {{s.dependencies|join(', ')}}){% endif %}</div>
-    {% endfor %}
-  </div>
-</section>
-
-<section class="grid">
-  <div class="card">
-    <h3>Users mapping review</h3>
-    <div>unresolved={{unresolved_users|length}}, ambiguous={{ambiguous_users|length}}, queue={{review_queue|length}}</div>
-    {% if review_queue %}
-      {% for q in review_queue %}
-      <div>source {{q.source_id}} · {{q.reason}} · candidates {{q.candidates|length}}</div>
-      {% endfor %}
-    {% else %}
-      <div>No unresolved user conflicts.</div>
-    {% endif %}
-  </div>
-  <div class="card">
-    <h3>Relation integrity / verification {% if selected_run_id %}(run {{selected_run_id}}){% endif %}</h3>
+    <h3>Целостность / верификация {% if selected_run_id %}(run {{selected_run_id}}){% endif %}</h3>
     {% if verification_results %}
       {% for r in verification_results %}
       <div>{{r.check_type}} · {{r.entity_type}} · <span class="status {{r.status}}">{{r.status}}</span></div>
       {% endfor %}
     {% else %}
-      <div>No verification results yet.</div>
+      <div>Результатов верификации пока нет.</div>
     {% endif %}
   </div>
 </section>
 
 <section class="grid">
   <div class="card">
-    <h3>CRM schemas and dictionaries status</h3>
+    <h3>Статус CRM-схем и справочников</h3>
     <div>categories/stages/custom_fields={{crm_schema_status|length}}</div>
   </div>
   <div class="card">
-    <h3>CRM entities status</h3>
+    <h3>Статус CRM-сущностей</h3>
     <div>contacts={{crm_contact_status|length}}, companies={{crm_company_status|length}}, deals={{crm_deal_status|length}}</div>
     <div>crm_comments={{crm_comment_status|length}}, crm_file_refs={{crm_file_ref_status|length}}</div>
   </div>
 </section>
 
 <section class="card">
-  <h3>Unresolved CRM references</h3>
+  <h3>Неразрешённые CRM ссылки</h3>
   {% for r in unresolved_crm %}
     <div>{{r.entity_type}}: {{r.source_id}} · {{r.status}} · {{r.resolution_strategy}}</div>
   {% else %}
-    <div>No unresolved CRM references.</div>
+    <div>Неразрешённых CRM ссылок нет.</div>
   {% endfor %}
 </section>
 
 <section class="grid">
   <div class="card">
-    <h3>Groups/Projects migration status</h3>
+    <h3>Статус миграции групп/проектов</h3>
     <div>groups={{group_status|length}}, projects={{project_status|length}}</div>
   </div>
   <div class="card">
-    <h3>Tasks/Comments/File refs status</h3>
+    <h3>Статус задач/комментариев/файловых ссылок</h3>
     <div>tasks={{task_status|length}}, comments={{comment_status|length}}, file_refs={{file_ref_status|length}}</div>
   </div>
 </section>
 
 <section class="grid">
   <div class="card">
-    <h3>Cleanup preview</h3>
+    <h3>Предпросмотр очистки</h3>
     <div>mapped_total={{cleanup_preview.target_inspection.mapped_total}}, unresolved_total={{cleanup_preview.target_inspection.unresolved_total}}</div>
     {% for action in cleanup_preview.cleanup_plan.actions %}
       <div>{{action.entity}}: {{action.mode}}</div>
     {% endfor %}
   </div>
   <div class="card">
-    <h3>Delta / cutover readiness</h3>
+    <h3>Готовность delta / cutover</h3>
     <div>delta strategy: {{delta_plan.strategy}}</div>
     <div>resume_supported: {{delta_plan.resume_supported}}</div>
     <div>steps: {{delta_plan.steps|length}}</div>
@@ -111,11 +124,11 @@
 </section>
 
 <section class="card">
-  <h3>Entity-specific audit (recent mappings)</h3>
+  <h3>Аудит по сущностям (последние маппинги)</h3>
   {% for m in mappings %}
     <div>{{m.entity_type}}: {{m.source_id}} -> {{m.target_id or 'N/A'}} · {{m.status}} · {{m.resolution_strategy}}</div>
   {% else %}
-    <div>No mapping records yet.</div>
+    <div>Записей маппинга пока нет.</div>
   {% endfor %}
 </section>
 {% endblock %}

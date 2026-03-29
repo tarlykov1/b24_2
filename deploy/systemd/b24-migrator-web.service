@@ -1,0 +1,17 @@
+[Unit]
+Description=Bitrix24 Migration Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/b24_2
+Environment=MIGRATION_CONFIG_PATH=/opt/b24_2/migration.config.yml
+Environment=B24_WEB_USERNAME=admin
+Environment=B24_WEB_PASSWORD=2156
+ExecStart=/opt/b24_2/.venv/bin/uvicorn b24_migrator.web.app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
