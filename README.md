@@ -2,199 +2,133 @@
 
 Production-oriented runtime for deterministic Bitrix24 migration with **CLI + Web UI** over one shared service layer.
 
-## Zero-input local install (recommended)
+## One-command Docker install (default path)
 
-Main install path is now a short zero-input flow:
+> Default runtime is now fully dockerized: **db + web UI/runtime in Docker Compose**.
 
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-What `install.sh` does automatically:
+Installer flow:
 
-1. verifies `docker`, `docker compose` (or `docker-compose`), `python3`;
-2. generates local DB secrets in `.local/install/db.env` (safe permissions);
-3. starts MySQL/MariaDB in Docker via `docker-compose.db.yml`;
-4. waits for DB `healthy` state;
-5. creates `migration.config.yml` automatically (if missing);
-6. creates `.venv`, installs Python dependencies;
-7. runs `b24-runtime install:local` (deployment check + schema init + sanity checks);
-8. prints final **готово** summary with status and useful follow-up commands.
+1. checks `docker` and `docker compose` (or `docker-compose`);
+2. generates `.env` (DB credentials, web basic auth, web port) if missing;
+3. generates `migration.config.yml` if missing;
+4. runs `docker compose up -d --build`;
+5. waits until **db** and **web** are `healthy`;
+6. prints final URL/login/password summary.
 
-Generated files are idempotent by default:
+Default credentials on first install:
 
-- if `.local/install/db.env` exists, secrets are reused;
-- if `migration.config.yml` exists, installer does not overwrite it.
+- `B24_WEB_USERNAME=admin`
+- `B24_WEB_PASSWORD=2156`
 
-Useful DB commands after install:
+The installer is idempotent: existing `.env` and config are reused.
+
+### Result after successful install
+
+- MariaDB runtime DB is running in Docker with persistent volume.
+- Web UI/runtime (`uvicorn b24_migrator.web.app:app`) is running in Docker.
+- Basic Auth is active for all routes when `B24_WEB_USERNAME/B24_WEB_PASSWORD` are set.
+- URL is available immediately from installer summary.
+
+### Runtime operations
 
 ```bash
-docker compose -f docker-compose.db.yml ps
-docker compose -f docker-compose.db.yml logs db
-docker compose -f docker-compose.db.yml down
+# status
+docker compose ps
+
+# logs
+docker compose logs -f web db
+
+# stop
+docker compose down
+
+# restart
+docker compose up -d
 ```
+
+## Configuration and auth
+
+### Auto-generated config
+
+Generated file: `migration.config.yml`
+
+- created automatically when missing;
+- uses generated DB credentials from `.env`;
+- no mandatory manual `database_url` editing for first run.
+
+`runtime_mode: production` keeps MySQL-only storage policy.
+
+### Basic Auth
+
+When env vars are present, UI/API access always requires HTTP Basic Auth:
+
+```bash
+B24_WEB_USERNAME=admin
+B24_WEB_PASSWORD=2156
+```
+
+In docker-first mode these values are stored in `.env`.
+
+## Healthchecks
+
+Compose includes healthchecks for both services:
+
+- `db`: MariaDB ping healthcheck;
+- `web`: `/health` probe (with basic auth headers when auth is enabled).
+
+`install.sh` reports success only after both are healthy.
+
+## Known limitations
+
+- HTTPS is **not enabled** in default docker-first scenario.
+- For production domain/TLS/public exposure, use reverse proxy as **optional advanced mode**.
+
+## Advanced/manual mode (optional)
+
+If you need custom infra (systemd/nginx/manual process control), use this path.
+
+### Manual Python runtime install
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/b24-runtime deployment:check --config migration.config.yml
+.venv/bin/b24-runtime install:local --config migration.config.yml
+```
+
+### Manual web start
+
+```bash
+uvicorn b24_migrator.web.app:app
+```
+
+### Optional systemd + nginx examples
+
+- systemd unit: `deploy/systemd/b24-migrator-web.service`
+- nginx reverse proxy example: `deploy/nginx/b24-migrator.conf`
+
+These are not required for default install scenario.
 
 ## Summary
 
-This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds first full **data-plane sprint** plus CRM sprint 2 data-plane:
+This repository keeps the baseline and includes enterprise extensions:
 
-- users/groups/projects/tasks/comments/file references end-to-end migration services;
-- CRM schemas (categories/pipelines, stages/statuses, supported custom fields subset) and CRM entities (contacts/companies/deals);
-- CRM comments and CRM file reference metadata migration with mapping-based relation checks;
-- canonical source↔target mapping subsystem (without relying on ID equality);
-- user conflict policy with manual review queue + manual override API/CLI;
-- dependency-aware execution safety (users unresolved => dependent domains blocked);
+- users/groups/projects/tasks/comments/file references migration services;
+- CRM schemas and CRM entities migration;
+- source↔target mapping subsystem;
+- user conflict policy + manual review queue;
+- dependency-aware execution safety;
 - expanded verification (`verify:counts`, `verify:relations`, `verify:integrity`, `verify:files`) persisted in DB;
-- cleanup/delta/cutover planning with safety rails (dry-run first, preserve users policy);
+- cleanup/delta/cutover planning;
 - enterprise UI screen for matrix/mappings/conflicts/verification/cleanup/delta.
-
-## What is treated as existing baseline
-
-Unchanged architectural baseline from previous PR:
-
-- RuntimeService / shared service layer.
-- CLI commands and deterministic JSON output style.
-- FastAPI + Jinja2/HTMX MVP dashboard/config/run pages.
-- Persistent runtime/audit storage.
-- Dockerfile, docker-compose, `.env.example`, config templates.
-
-## Supported migration matrix
-
-| Entity | Status | Source API | Target API | Dependencies | Mapping | Verification | Delta | Cleanup | Risk notes |
-|---|---|---|---|---|---|---|---|---|---|
-| users | implemented | user.get/list | user.get/list | - | XML_ID/email/login/manual | counts+relations+integrity | incremental match refresh | preserve target users only | ambiguous identity review queue |
-| groups | implemented | sonet_group.get | sonet_group.create/update | users | canonical map | counts+relations+integrity | planned | preview only | blocked on unresolved user_map |
-| projects | implemented | sonet_group.get(project) | sonet_group.create(project) | users, groups | canonical map | counts+relations+integrity | planned | preview only | owner/member links via user_map |
-| tasks | implemented | tasks.task.list/get | tasks.task.add/update | users, groups/projects | canonical map | counts+relations+integrity | planned | preview only | blocks on unresolved user/group/project refs |
-| crm | partial | crm.contact/company/deal.list + crm.status + crm.category + userfield | crm.contact/company/deal.add/update | users, schemas | canonical map | counts+relations+integrity | planned | preview only | contacts/companies/deals + dictionaries implemented, custom fields subset only |
-| business processes | partial | bizproc.workflow.template.list | bizproc.workflow.template.add | users, schemas | canonical map | relations+integrity | planned | preview only | template constants/users |
-| smart processes | partial | crm.type + crm.item | crm.type + crm.item | users, schemas | canonical map | counts+relations+integrity | planned | preview only | type before items |
-| comments | implemented | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | counts+relations+integrity | planned | preview only | task and CRM comment relation verification |
-| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | task+CRM metadata/reference layer implemented, payload copy planned |
-| reports | planned | report.* | report.* | users, crm/tasks/items | canonical map | relations | planned | preview only | API variance by plan |
-| robots | partial | crm.automation.* | crm.automation.* | bp, schemas | canonical map | relations+integrity | planned | preview only | stage/action remap |
-| webhooks | implemented | event.bind/list | event.bind/list | users | canonical map | integrity | planned | preview only | rotate secrets at cutover |
-| automation | partial | bizproc + crm.automation.* | bizproc + crm.automation.* | bp, robots | canonical map | relations+integrity | planned | preview only | tenant-specific references |
-
-## Unified mapping layer
-
-Persisted table `migration_mappings` fields:
-
-- `entity_type`, `source_id`, `source_uid`, `target_id`, `target_uid`
-- `status`, `resolution_strategy`, `verification_status`
-- `linked_parent_type`, `linked_parent_source_id`, `linked_parent_target_id`
-- `payload_hash`, `created_at`, `updated_at`, `error_payload_json`
-
-Supported entities in canonical mapping subsystem:
-
-- users, groups, projects, tasks, crm entities, comments, files,
-- bp templates, robots, smart process types/items, reports, webhooks.
-
-## User conflict policy
-
-`UserResolutionService` applies matching order:
-
-1. XML_ID
-2. email
-3. login
-4. otherwise manual review queue
-
-Rules:
-
-- target users are **preserved** (not deleted by cleanup);
-- ambiguous matches go to `migration_user_review_queue`;
-- unmatched users are stored as mapping rows with `status=unmatched` and explicit error payload;
-- all non-user references are expected to resolve through `user_map` mapping rows.
-
-## Domain modules and execution graph
-
-Domain lifecycle tracking is provided for:
-
-- Users
-- Groups/Projects
-- Tasks
-- CRM
-- Smart Processes
-- Business Processes / Robots / Automation
-- Comments
-- Files
-- Reports
-- Webhooks / Integrations
-
-Execution order graph:
-
-1. users
-2. schemas/custom fields/categories/stages
-3. contacts/companies
-4. deals
-5. crm comments
-6. crm file refs
-7. groups/projects
-8. tasks
-9. comments
-10. file refs
-11. verification
-12. delta/cutover
-
-## Verification coverage
-
-Checks persisted in `migration_verification_results`:
-
-- `verify:counts`
-- `verify:relations`
-- `verify:integrity`
-- `verify:files`
-
-Relation rules covered (including new sprint domains):
-
-- task -> creator/responsible/accomplices/auditors user mappings
-- task -> group/project
-- comment -> task
-- comment -> author
-- file ref -> task
-- deal -> company/contact
-- crm entity -> stage/category/custom field
-- bp template -> user/field/entity-type
-- robot -> stage/action/assignee
-- smart process item -> type/field/entity
-- report -> owner/filter/source entity
-- webhook/integration -> target binding validity
-
-Verification output is available in DB, CLI and Web UI.
-
-## Delta / cutover / cleanup flow
-
-Implemented control-plane commands/services:
-
-- target inspection
-- cleanup-plan (dry-run safety by default)
-- cleanup-execute (unsafe destructive path blocked without explicit safe plan)
-- preserve users policy
-- delta plan/execute
-- cutover readiness based on unresolved mappings + verification result
-
-Rules:
-
-- no destructive cleanup without explicit dry-run report;
-- no silent overwrite of target defaults.
-
-## Web UI additions
-
-New enterprise view (`/enterprise`) extends MVP dashboard with:
-
-- migration matrix
-- domain module statuses
-- dependency graph
-- users mapping review queue
-- verification results
-- cleanup preview
-- delta readiness
-- entity mapping audit overview
 
 ## CLI additions
 
-Core commands kept from baseline:
+Core commands:
 
 - `b24-runtime create-job`
 - `b24-runtime plan`
@@ -204,6 +138,7 @@ Core commands kept from baseline:
 - `b24-runtime report`
 - `b24-runtime verify`
 - `b24-runtime deployment:check`
+- `b24-runtime install:local`
 
 Enterprise extensions:
 
@@ -229,70 +164,7 @@ Enterprise extensions:
 - `delta:execute`
 - `cutover:readiness`
 
-## Docker/run
-
-Existing Docker setup remains valid (`docker compose up --build`). Enterprise additions are schema-compatible via new Alembic revision `0003_enterprise_mapping_and_verification`.
-
-Config keeps `runtime_mode` and **MySQL-only** production rule from baseline (`runtime_mode: production` + MySQL URL in production).
-
-## Web UI
-
-### Запуск
-
-```bash
-uvicorn b24_migrator.web.app:app
-```
-
-### Через systemd
-
-Готовый unit-файл: `deploy/systemd/b24-migrator-web.service`.
-
-Ключевые требования production:
-
-- bind только на `127.0.0.1:8000`;
-- внешний доступ только через reverse proxy (например, nginx).
-
-### Через nginx
-
-Готовый конфиг reverse proxy: `deploy/nginx/b24-migrator.conf`.
-
-### Авторизация
-
-Если заданы переменные ниже, включается HTTP Basic Auth для UI и API:
-
-```bash
-B24_WEB_USERNAME=admin
-B24_WEB_PASSWORD=2156
-```
-
-## Manual/advanced install mode
-
-If you need fully manual DB provisioning/custom credentials:
-
-1. Prepare MySQL yourself.
-2. Create `migration.config.yml` manually (or from `migration.config.yml.example`).
-3. Install dependencies and run checks:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/b24-runtime deployment:check --config migration.config.yml
-.venv/bin/b24-runtime install:local --config migration.config.yml
-```
-
 ## Testing
-
-New/updated tests include:
-
-- user matching policy (XML_ID/email/login/manual), ambiguous queue, manual override
-- unresolved users blocking groups/tasks migration
-- task/comment/file reference relation checks
-- file refs verification with explicit partial payload-copy status
-- CLI regression for new data-plane commands
-- API tests for mapping review + domain migration endpoints
-- existing CLI/web regression
-
-Run with:
 
 ```bash
 pytest
