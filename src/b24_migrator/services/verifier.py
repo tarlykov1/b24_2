@@ -19,6 +19,7 @@ class VerificationService:
         "smart_process_item": ("type/field/entity",),
         "report": ("owner/filter/source_entity",),
         "webhook": ("target_binding_validity",),
+        "crm_deal": ("company/contact/responsible_user/stage/category/custom_fields",),
     }
 
     def verify_run(self, result: ExecutionResult, mappings: list[MappingRecord] | None = None) -> dict[str, object]:
@@ -47,7 +48,10 @@ class VerificationService:
         for row in mappings:
             by_entity[row.entity_type] = by_entity.get(row.entity_type, 0) + 1
         duplicate_bindings = self._duplicate_target_bindings(mappings)
-        files_partial = [m for m in mappings if m.entity_type == "file_refs" and m.verification_status == "partial"]
+        files_partial = [m for m in mappings if m.entity_type in {"file_refs", "crm_file_refs"} and m.verification_status == "partial"]
+        crm_relation_failures = self._crm_relation_failures(mappings)
+        crm_entities = {"crm_contacts", "crm_companies", "crm_deals", "crm_comments", "crm_file_refs"}
+        crm_unresolved = [m for m in unresolved if m.entity_type in crm_entities]
         checks = [
             VerificationResult(
                 result_id=None,
@@ -63,8 +67,13 @@ class VerificationService:
                 run_id=result.run_id,
                 check_type="verify:relations",
                 entity_type="global",
-                status="passed" if not relation_failures else "failed",
-                details={"failed_relations": len(relation_failures), "required_rules": self.relation_rules, "failed_samples": [f"{m.entity_type}:{m.source_id}" for m in relation_failures[:20]]},
+                status="passed" if not relation_failures and not crm_relation_failures else "failed",
+                details={
+                    "failed_relations": len(relation_failures),
+                    "crm_relation_failures": crm_relation_failures,
+                    "required_rules": self.relation_rules,
+                    "failed_samples": [f"{m.entity_type}:{m.source_id}" for m in relation_failures[:20]],
+                },
                 created_at=now,
             ),
             VerificationResult(
@@ -75,6 +84,7 @@ class VerificationService:
                 status="passed" if not unresolved and not duplicate_bindings else "failed",
                 details={
                     "unresolved_mappings": len(unresolved),
+                    "unresolved_crm_mappings": len(crm_unresolved),
                     "duplicate_or_conflicting_target_bindings": duplicate_bindings,
                     "unresolved_samples": [f"{m.entity_type}:{m.source_id}:{m.status}" for m in unresolved[:20]],
                 },
@@ -91,6 +101,21 @@ class VerificationService:
                     "metadata_presence": "checked",
                     "payload_copy": "partial_planned" if files_partial else "full_or_not_required",
                     "partial_refs": len(files_partial),
+                },
+                created_at=now,
+            ),
+            VerificationResult(
+                result_id=None,
+                run_id=result.run_id,
+                check_type="verify:counts",
+                entity_type="crm",
+                status="passed",
+                details={
+                    "contacts": by_entity.get("crm_contacts", 0),
+                    "companies": by_entity.get("crm_companies", 0),
+                    "deals": by_entity.get("crm_deals", 0),
+                    "crm_comments": by_entity.get("crm_comments", 0),
+                    "crm_file_refs": by_entity.get("crm_file_refs", 0),
                 },
                 created_at=now,
             ),
@@ -111,3 +136,15 @@ class VerificationService:
             else:
                 seen[key] = row.source_id
         return conflicts
+
+    @staticmethod
+    def _crm_relation_failures(mappings: list[MappingRecord]) -> list[dict[str, str]]:
+        failures: list[dict[str, str]] = []
+        for row in mappings:
+            if row.entity_type != "crm_deals" or row.status != "resolved":
+                continue
+            payload = row.error_payload if isinstance(row.error_payload, dict) else None
+            if payload and payload.get("missing_refs"):
+                failures.append({"entity_type": row.entity_type, "source_id": row.source_id, "reason": "missing_refs"})
+                continue
+        return failures

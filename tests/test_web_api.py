@@ -146,3 +146,40 @@ def test_mapping_review_and_data_plane_endpoints(tmp_path: Path) -> None:
     assert comments.status_code == 200
     files = client.post("/files/refs/migrate", data={"source_refs_json": '[{"id":"700","task_id":"100","name":"a.txt"}]'})
     assert files.status_code == 200
+
+    crm_sync = client.post(
+        "/crm/sync",
+        data={
+            "source_categories_json": '[{"id":"10","code":"PIPE_A","name":"A"}]',
+            "target_categories_json": '[{"id":"110","code":"PIPE_A","name":"A"}]',
+            "source_stages_json": '[{"id":"20","code":"STAGE_NEW","name":"New"}]',
+            "target_stages_json": '[{"id":"120","code":"STAGE_NEW","name":"New"}]',
+            "source_custom_fields_json": '[{"id":"30","code":"UF_1","type":"string"}]',
+            "target_custom_fields_json": '[{"id":"130","code":"UF_1"}]',
+        },
+    )
+    assert crm_sync.status_code == 200
+
+    crm_contacts = client.post(
+        "/crm/contacts/migrate",
+        data={"source_contacts_json": '[{"id":"201","xml_id":"c201","responsible_id":"1","custom_fields":{"30":"v"}}]', "target_contacts_json": '[{"id":"221","xml_id":"c201"}]'},
+    )
+    assert crm_contacts.status_code == 200
+
+    crm_companies = client.post(
+        "/crm/companies/migrate",
+        data={"source_companies_json": '[{"id":"301","xml_id":"co301","responsible_id":"2","custom_fields":{"30":"v"}}]', "target_companies_json": '[{"id":"331","xml_id":"co301"}]'},
+    )
+    assert crm_companies.status_code == 200
+
+    crm_deals = client.post(
+        "/crm/deals/migrate",
+        data={"source_deals_json": '[{"id":"401","xml_id":"d401","responsible_id":"1","category_id":"10","stage_id":"20","company_id":"301","contact_ids":["201"],"custom_fields":{"30":"ok"}}]', "target_deals_json": '[{"id":"441","xml_id":"d401"}]'},
+    )
+    assert crm_deals.status_code == 200
+
+    crm_comments = client.post("/crm/comments/migrate", data={"source_comments_json": '[{"id":"501","entity_type":"deal","entity_id":"401","author_id":"1","body":"crm"}]'})
+    assert crm_comments.status_code == 200
+
+    crm_refs = client.post("/crm/files/refs/migrate", data={"source_refs_json": '[{"id":"601","owner_type":"deal","owner_id":"401","name":"crm.txt"}]'})
+    assert crm_refs.status_code == 200

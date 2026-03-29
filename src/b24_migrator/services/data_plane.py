@@ -281,6 +281,392 @@ class DataPlaneMigrationService:
             )
         return {"migrated": migrated, "blocked": blocked, "payload_copy": "partial_planned"}
 
+    def sync_crm_dictionaries(
+        self,
+        session: Session,
+        *,
+        source_categories: list[dict[str, Any]],
+        target_categories: list[dict[str, Any]],
+        source_stages: list[dict[str, Any]],
+        target_stages: list[dict[str, Any]],
+        source_custom_fields: list[dict[str, Any]],
+        target_custom_fields: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        categories = self._sync_dictionary(session, entity_type="crm_categories", source_rows=source_categories, target_rows=target_categories)
+        stages = self._sync_dictionary(session, entity_type="crm_stages", source_rows=source_stages, target_rows=target_stages)
+
+        implemented_types = {"string", "double", "integer", "boolean", "date", "datetime", "enumeration"}
+        partial_types = {"crm", "employee", "money", "url"}
+        target_by_code = {str(row.get("code") or ""): row for row in target_custom_fields if row.get("code")}
+        custom_fields_result = {"implemented": 0, "partial": 0, "unsupported": 0, "resolved": 0, "created": 0}
+        for field in source_custom_fields:
+            src_id = str(field["id"])
+            code = str(field.get("code") or "")
+            field_type = str(field.get("type") or "").lower()
+            target = target_by_code.get(code)
+            if field_type in implemented_types:
+                support = "implemented"
+            elif field_type in partial_types:
+                support = "partial"
+            else:
+                support = "unsupported"
+            custom_fields_result[support] += 1
+            if support == "unsupported":
+                self._mapping.upsert_mapping(
+                    session,
+                    entity_type="crm_custom_fields",
+                    source_id=src_id,
+                    source_uid=code,
+                    target_id=None,
+                    target_uid=None,
+                    status="error",
+                    resolution_strategy="unsupported_field_type",
+                    verification_status="failed",
+                    error_payload={"field_type": field_type, "support_status": support},
+                )
+                continue
+            target_id = str(target["id"]) if target else f"created:crm_custom_field:{src_id}"
+            custom_fields_result["resolved" if target else "created"] += 1
+            self._mapping.upsert_mapping(
+                session,
+                entity_type="crm_custom_fields",
+                source_id=src_id,
+                source_uid=code,
+                target_id=target_id,
+                target_uid=code if target else field.get("code"),
+                status="resolved",
+                resolution_strategy="match:code" if target else "create_on_target",
+                verification_status="partial" if support == "partial" else "pending",
+                payload={"field_type": field_type, "support_status": support},
+            )
+        return {"categories": categories, "stages": stages, "custom_fields": custom_fields_result}
+
+    def migrate_crm_contacts(self, session: Session, *, source_contacts: list[dict[str, Any]], target_contacts: list[dict[str, Any]]) -> dict[str, Any]:
+        user_map = self._mapping_by_source(session, "users")
+        stage_map = self._mapping_by_source(session, "crm_stages")
+        category_map = self._mapping_by_source(session, "crm_categories")
+        field_map = self._mapping_by_source(session, "crm_custom_fields")
+        target_by_uid = {str(item.get("xml_id") or ""): item for item in target_contacts if item.get("xml_id")}
+        return self._migrate_crm_entities(
+            session,
+            entity_type="crm_contacts",
+            source_entities=source_contacts,
+            user_map=user_map,
+            stage_map=stage_map,
+            category_map=category_map,
+            field_map=field_map,
+            target_by_uid=target_by_uid,
+        )
+
+    def migrate_crm_companies(self, session: Session, *, source_companies: list[dict[str, Any]], target_companies: list[dict[str, Any]]) -> dict[str, Any]:
+        user_map = self._mapping_by_source(session, "users")
+        stage_map = self._mapping_by_source(session, "crm_stages")
+        category_map = self._mapping_by_source(session, "crm_categories")
+        field_map = self._mapping_by_source(session, "crm_custom_fields")
+        target_by_uid = {str(item.get("xml_id") or ""): item for item in target_companies if item.get("xml_id")}
+        return self._migrate_crm_entities(
+            session,
+            entity_type="crm_companies",
+            source_entities=source_companies,
+            user_map=user_map,
+            stage_map=stage_map,
+            category_map=category_map,
+            field_map=field_map,
+            target_by_uid=target_by_uid,
+        )
+
+    def migrate_crm_deals(self, session: Session, *, source_deals: list[dict[str, Any]], target_deals: list[dict[str, Any]]) -> dict[str, Any]:
+        user_map = self._mapping_by_source(session, "users")
+        stage_map = self._mapping_by_source(session, "crm_stages")
+        category_map = self._mapping_by_source(session, "crm_categories")
+        field_map = self._mapping_by_source(session, "crm_custom_fields")
+        company_map = self._mapping_by_source(session, "crm_companies")
+        contact_map = self._mapping_by_source(session, "crm_contacts")
+        target_by_uid = {str(item.get("xml_id") or ""): item for item in target_deals if item.get("xml_id")}
+        migrated = 0
+        blocked = 0
+        for deal in source_deals:
+            source_id = str(deal["id"])
+            missing_refs = self._missing_crm_refs(
+                deal,
+                user_map=user_map,
+                stage_map=stage_map,
+                category_map=category_map,
+                field_map=field_map,
+                require_category=True,
+                require_stage=True,
+            )
+            company_id = deal.get("company_id")
+            if company_id is not None and str(company_id) not in company_map:
+                missing_refs["company_id"] = str(company_id)
+            unresolved_contacts = [str(cid) for cid in deal.get("contact_ids", []) if str(cid) not in contact_map]
+            if unresolved_contacts:
+                missing_refs["contact_ids"] = unresolved_contacts
+            if missing_refs:
+                blocked += 1
+                self._mapping.upsert_mapping(
+                    session,
+                    entity_type="crm_deals",
+                    source_id=source_id,
+                    source_uid=deal.get("xml_id"),
+                    target_id=None,
+                    target_uid=None,
+                    status="error",
+                    resolution_strategy="blocked_by_unresolved_dependency",
+                    verification_status="failed",
+                    linked_parent_type="crm_companies/crm_contacts",
+                    linked_parent_source_id=str(company_id or ""),
+                    linked_parent_target_id=company_map.get(str(company_id or "")),
+                    error_payload={"missing_refs": missing_refs},
+                )
+                continue
+            target = target_by_uid.get(str(deal.get("xml_id") or ""))
+            target_id = str(target["id"]) if target else f"created:crm_deal:{source_id}"
+            migrated += 1
+            self._mapping.upsert_mapping(
+                session,
+                entity_type="crm_deals",
+                source_id=source_id,
+                source_uid=deal.get("xml_id"),
+                target_id=target_id,
+                target_uid=target.get("xml_id") if target else deal.get("xml_id"),
+                status="resolved",
+                resolution_strategy="match:xml_id" if target else "create_on_target",
+                verification_status="pending",
+                linked_parent_type="crm_companies",
+                linked_parent_source_id=str(company_id or ""),
+                linked_parent_target_id=company_map.get(str(company_id or "")),
+                payload={
+                    "responsible_target_user_id": user_map.get(str(deal.get("responsible_id"))),
+                    "category_target_id": category_map.get(str(deal.get("category_id"))),
+                    "stage_target_id": stage_map.get(str(deal.get("stage_id"))),
+                    "company_target_id": company_map.get(str(company_id)) if company_id is not None else None,
+                    "contact_target_ids": [contact_map[str(cid)] for cid in deal.get("contact_ids", [])],
+                    "custom_field_bindings": self._bind_custom_fields(deal.get("custom_fields", {}), field_map),
+                },
+            )
+        return {"migrated": migrated, "blocked": blocked}
+
+    def migrate_crm_comments(self, session: Session, *, source_comments: list[dict[str, Any]]) -> dict[str, Any]:
+        user_map = self._mapping_by_source(session, "users")
+        entity_maps = {
+            "deal": self._mapping_by_source(session, "crm_deals"),
+            "company": self._mapping_by_source(session, "crm_companies"),
+            "contact": self._mapping_by_source(session, "crm_contacts"),
+        }
+        migrated = 0
+        blocked = 0
+        for comment in source_comments:
+            src_id = str(comment["id"])
+            entity_type = str(comment.get("entity_type") or "").lower()
+            entity_source_id = str(comment.get("entity_id") or "")
+            author_id = str(comment.get("author_id") or "")
+            parent_map = entity_maps.get(entity_type, {})
+            if entity_source_id not in parent_map or author_id not in user_map:
+                blocked += 1
+                self._mapping.upsert_mapping(
+                    session,
+                    entity_type="crm_comments",
+                    source_id=src_id,
+                    source_uid=comment.get("xml_id"),
+                    target_id=None,
+                    target_uid=None,
+                    status="error",
+                    resolution_strategy="blocked_by_unresolved_dependency",
+                    verification_status="failed",
+                    linked_parent_type=f"crm_{entity_type}",
+                    linked_parent_source_id=entity_source_id,
+                    linked_parent_target_id=parent_map.get(entity_source_id),
+                    error_payload={"missing_entity": entity_source_id not in parent_map, "missing_author": author_id not in user_map},
+                )
+                continue
+            migrated += 1
+            self._mapping.upsert_mapping(
+                session,
+                entity_type="crm_comments",
+                source_id=src_id,
+                source_uid=comment.get("xml_id"),
+                target_id=str(comment.get("target_id") or f"created:crm_comment:{src_id}"),
+                target_uid=comment.get("xml_id"),
+                status="resolved",
+                resolution_strategy="create_or_update",
+                verification_status="pending",
+                linked_parent_type=f"crm_{entity_type}",
+                linked_parent_source_id=entity_source_id,
+                linked_parent_target_id=parent_map[entity_source_id],
+                payload={"author_target_id": user_map[author_id], "body": comment.get("body"), "timestamps": {"created_at": comment.get("created_at"), "updated_at": comment.get("updated_at")}},
+            )
+        return {"migrated": migrated, "blocked": blocked}
+
+    def migrate_crm_file_refs(self, session: Session, *, source_refs: list[dict[str, Any]]) -> dict[str, Any]:
+        entity_maps = {
+            "deal": self._mapping_by_source(session, "crm_deals"),
+            "company": self._mapping_by_source(session, "crm_companies"),
+            "contact": self._mapping_by_source(session, "crm_contacts"),
+        }
+        migrated = 0
+        blocked = 0
+        for ref in source_refs:
+            src_id = str(ref["id"])
+            owner_type = str(ref.get("owner_type") or "").lower()
+            owner_source_id = str(ref.get("owner_id") or "")
+            parent_map = entity_maps.get(owner_type, {})
+            if owner_source_id not in parent_map:
+                blocked += 1
+                self._mapping.upsert_mapping(
+                    session,
+                    entity_type="crm_file_refs",
+                    source_id=src_id,
+                    source_uid=ref.get("xml_id"),
+                    target_id=None,
+                    target_uid=None,
+                    status="error",
+                    resolution_strategy="blocked_by_unresolved_dependency",
+                    verification_status="failed",
+                    linked_parent_type=f"crm_{owner_type}",
+                    linked_parent_source_id=owner_source_id,
+                    linked_parent_target_id=None,
+                    error_payload={"missing_owner_mapping": owner_source_id, "owner_type": owner_type},
+                )
+                continue
+            migrated += 1
+            self._mapping.upsert_mapping(
+                session,
+                entity_type="crm_file_refs",
+                source_id=src_id,
+                source_uid=ref.get("xml_id"),
+                target_id=str(ref.get("target_id") or f"crm_ref:{src_id}"),
+                target_uid=ref.get("external_id"),
+                status="resolved",
+                resolution_strategy="metadata_reference_only",
+                verification_status="partial",
+                linked_parent_type=f"crm_{owner_type}",
+                linked_parent_source_id=owner_source_id,
+                linked_parent_target_id=parent_map[owner_source_id],
+                payload={
+                    "name": ref.get("name"),
+                    "size": ref.get("size"),
+                    "mime": ref.get("mime"),
+                    "storage_id": ref.get("storage_id"),
+                    "payload_copy_status": "planned",
+                },
+            )
+        return {"migrated": migrated, "blocked": blocked, "payload_copy": "partial_planned"}
+
+    def _sync_dictionary(self, session: Session, *, entity_type: str, source_rows: list[dict[str, Any]], target_rows: list[dict[str, Any]]) -> dict[str, int]:
+        target_by_uid = {str(row.get("xml_id") or row.get("code") or ""): row for row in target_rows if row.get("xml_id") or row.get("code")}
+        target_by_name = {str(row.get("name") or "").strip().lower(): row for row in target_rows if row.get("name")}
+        resolved = 0
+        created = 0
+        for row in source_rows:
+            source_id = str(row["id"])
+            source_uid = row.get("xml_id") or row.get("code")
+            target = target_by_uid.get(str(source_uid or "")) or target_by_name.get(str(row.get("name") or "").strip().lower())
+            if target:
+                resolved += 1
+                target_id = str(target["id"])
+                strategy = "match:uid" if source_uid and str(target.get("xml_id") or target.get("code") or "") == str(source_uid) else "match:name"
+            else:
+                created += 1
+                target_id = f"created:{entity_type}:{source_id}"
+                strategy = "create_on_target"
+            self._mapping.upsert_mapping(
+                session,
+                entity_type=entity_type,
+                source_id=source_id,
+                source_uid=str(source_uid) if source_uid is not None else None,
+                target_id=target_id,
+                target_uid=str(target.get("xml_id") or target.get("code")) if target else str(source_uid or ""),
+                status="resolved",
+                resolution_strategy=strategy,
+                verification_status="pending",
+            )
+        return {"resolved": resolved, "created": created}
+
+    def _migrate_crm_entities(
+        self,
+        session: Session,
+        *,
+        entity_type: str,
+        source_entities: list[dict[str, Any]],
+        user_map: dict[str, str],
+        stage_map: dict[str, str],
+        category_map: dict[str, str],
+        field_map: dict[str, str],
+        target_by_uid: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        migrated = 0
+        blocked = 0
+        for row in source_entities:
+            source_id = str(row["id"])
+            missing_refs = self._missing_crm_refs(row, user_map=user_map, stage_map=stage_map, category_map=category_map, field_map=field_map, require_category=False, require_stage=False)
+            if missing_refs:
+                blocked += 1
+                self._mapping.upsert_mapping(
+                    session,
+                    entity_type=entity_type,
+                    source_id=source_id,
+                    source_uid=row.get("xml_id"),
+                    target_id=None,
+                    target_uid=None,
+                    status="error",
+                    resolution_strategy="blocked_by_unresolved_dependency",
+                    verification_status="failed",
+                    error_payload={"missing_refs": missing_refs},
+                )
+                continue
+            target = target_by_uid.get(str(row.get("xml_id") or ""))
+            target_id = str(target["id"]) if target else f"created:{entity_type}:{source_id}"
+            migrated += 1
+            self._mapping.upsert_mapping(
+                session,
+                entity_type=entity_type,
+                source_id=source_id,
+                source_uid=row.get("xml_id"),
+                target_id=target_id,
+                target_uid=target.get("xml_id") if target else row.get("xml_id"),
+                status="resolved",
+                resolution_strategy="match:xml_id" if target else "create_on_target",
+                verification_status="pending",
+                payload={
+                    "responsible_target_user_id": user_map.get(str(row.get("responsible_id"))),
+                    "category_target_id": category_map.get(str(row.get("category_id"))) if row.get("category_id") is not None else None,
+                    "stage_target_id": stage_map.get(str(row.get("stage_id"))) if row.get("stage_id") is not None else None,
+                    "custom_field_bindings": self._bind_custom_fields(row.get("custom_fields", {}), field_map),
+                },
+            )
+        return {"migrated": migrated, "blocked": blocked}
+
+    @staticmethod
+    def _bind_custom_fields(source_bindings: dict[str, Any], field_map: dict[str, str]) -> dict[str, Any]:
+        return {field_map[str(k)]: v for k, v in source_bindings.items() if str(k) in field_map}
+
+    @staticmethod
+    def _missing_crm_refs(
+        row: dict[str, Any],
+        *,
+        user_map: dict[str, str],
+        stage_map: dict[str, str],
+        category_map: dict[str, str],
+        field_map: dict[str, str],
+        require_category: bool,
+        require_stage: bool,
+    ) -> dict[str, Any]:
+        missing: dict[str, Any] = {}
+        responsible_id = row.get("responsible_id")
+        if responsible_id is not None and str(responsible_id) not in user_map:
+            missing["responsible_id"] = str(responsible_id)
+        category_id = row.get("category_id")
+        if require_category and category_id is not None and str(category_id) not in category_map:
+            missing["category_id"] = str(category_id)
+        stage_id = row.get("stage_id")
+        if require_stage and stage_id is not None and str(stage_id) not in stage_map:
+            missing["stage_id"] = str(stage_id)
+        unresolved_fields = [str(k) for k in row.get("custom_fields", {}).keys() if str(k) not in field_map]
+        if unresolved_fields:
+            missing["custom_field_ids"] = unresolved_fields
+        return missing
+
     @staticmethod
     def _mapping_by_source(session: Session, entity_type: str) -> dict[str, str]:
         rows = MappingRepository(session).list_all(entity_type=entity_type, status="resolved", limit=50000)

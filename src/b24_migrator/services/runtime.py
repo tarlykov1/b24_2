@@ -356,6 +356,87 @@ class RuntimeService:
             session.commit()
             return result
 
+    def crm_sync(
+        self,
+        source_categories: list[dict[str, Any]],
+        target_categories: list[dict[str, Any]],
+        source_stages: list[dict[str, Any]],
+        target_stages: list[dict[str, Any]],
+        source_custom_fields: list[dict[str, Any]],
+        target_custom_fields: list[dict[str, Any]],
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.sync_crm_dictionaries(
+                session,
+                source_categories=source_categories,
+                target_categories=target_categories,
+                source_stages=source_stages,
+                target_stages=target_stages,
+                source_custom_fields=source_custom_fields,
+                target_custom_fields=target_custom_fields,
+            )
+            self._audit(
+                session,
+                actor,
+                "crm_sync",
+                {"categories": len(source_categories), "stages": len(source_stages), "custom_fields": len(source_custom_fields)},
+                "success",
+                result,
+            )
+            session.commit()
+            return result
+
+    def crm_contacts_migrate(
+        self,
+        source_contacts: list[dict[str, Any]],
+        target_contacts: list[dict[str, Any]],
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_crm_contacts(session, source_contacts=source_contacts, target_contacts=target_contacts)
+            self._audit(session, actor, "crm_contacts_migrate", {"source_count": len(source_contacts)}, "success", result)
+            session.commit()
+            return result
+
+    def crm_companies_migrate(
+        self,
+        source_companies: list[dict[str, Any]],
+        target_companies: list[dict[str, Any]],
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_crm_companies(session, source_companies=source_companies, target_companies=target_companies)
+            self._audit(session, actor, "crm_companies_migrate", {"source_count": len(source_companies)}, "success", result)
+            session.commit()
+            return result
+
+    def crm_deals_migrate(
+        self,
+        source_deals: list[dict[str, Any]],
+        target_deals: list[dict[str, Any]],
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_crm_deals(session, source_deals=source_deals, target_deals=target_deals)
+            self._audit(session, actor, "crm_deals_migrate", {"source_count": len(source_deals)}, "success", result)
+            session.commit()
+            return result
+
+    def crm_comments_migrate(self, source_comments: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_crm_comments(session, source_comments=source_comments)
+            self._audit(session, actor, "crm_comments_migrate", {"source_count": len(source_comments)}, "success", result)
+            session.commit()
+            return result
+
+    def crm_file_refs_migrate(self, source_refs: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_crm_file_refs(session, source_refs=source_refs)
+            self._audit(session, actor, "crm_file_refs_migrate", {"source_count": len(source_refs)}, "success", result)
+            session.commit()
+            return result
+
     def list_user_review_queue(self, limit: int = 500) -> list[dict[str, Any]]:
         with self.session_factory.create_session() as session:
             return [to_dict(i) for i in UserReviewQueueRepository(session).list_open(limit=limit)]

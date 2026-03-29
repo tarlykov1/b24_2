@@ -4,9 +4,11 @@ Production-oriented runtime for deterministic Bitrix24 migration with **CLI + We
 
 ## Summary
 
-This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds first full **data-plane sprint**:
+This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds first full **data-plane sprint** plus CRM sprint 2 data-plane:
 
 - users/groups/projects/tasks/comments/file references end-to-end migration services;
+- CRM schemas (categories/pipelines, stages/statuses, supported custom fields subset) and CRM entities (contacts/companies/deals);
+- CRM comments and CRM file reference metadata migration with mapping-based relation checks;
 - canonical source↔target mapping subsystem (without relying on ID equality);
 - user conflict policy with manual review queue + manual override API/CLI;
 - dependency-aware execution safety (users unresolved => dependent domains blocked);
@@ -32,11 +34,11 @@ Unchanged architectural baseline from previous PR:
 | groups | implemented | sonet_group.get | sonet_group.create/update | users | canonical map | counts+relations+integrity | planned | preview only | blocked on unresolved user_map |
 | projects | implemented | sonet_group.get(project) | sonet_group.create(project) | users, groups | canonical map | counts+relations+integrity | planned | preview only | owner/member links via user_map |
 | tasks | implemented | tasks.task.list/get | tasks.task.add/update | users, groups/projects | canonical map | counts+relations+integrity | planned | preview only | blocks on unresolved user/group/project refs |
-| crm | partial | crm.*.list | crm.*.add/update | users, schemas | canonical map | counts+relations+integrity | planned | preview only | stage/category remap |
+| crm | partial | crm.contact/company/deal.list + crm.status + crm.category + userfield | crm.contact/company/deal.add/update | users, schemas | canonical map | counts+relations+integrity | planned | preview only | contacts/companies/deals + dictionaries implemented, custom fields subset only |
 | business processes | partial | bizproc.workflow.template.list | bizproc.workflow.template.add | users, schemas | canonical map | relations+integrity | planned | preview only | template constants/users |
 | smart processes | partial | crm.type + crm.item | crm.type + crm.item | users, schemas | canonical map | counts+relations+integrity | planned | preview only | type before items |
-| comments | implemented | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | counts+relations+integrity | planned | preview only | comment->task and comment->author verification |
-| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | metadata/reference layer implemented, payload copy planned |
+| comments | implemented | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | counts+relations+integrity | planned | preview only | task and CRM comment relation verification |
+| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | task+CRM metadata/reference layer implemented, payload copy planned |
 | reports | planned | report.* | report.* | users, crm/tasks/items | canonical map | relations | planned | preview only | API variance by plan |
 | robots | partial | crm.automation.* | crm.automation.* | bp, schemas | canonical map | relations+integrity | planned | preview only | stage/action remap |
 | webhooks | implemented | event.bind/list | event.bind/list | users | canonical map | integrity | planned | preview only | rotate secrets at cutover |
@@ -90,17 +92,17 @@ Domain lifecycle tracking is provided for:
 Execution order graph:
 
 1. users
-2. groups/projects
-3. tasks
-4. comments
-5. file refs
-6. schemas/custom fields/categories/stages
-7. BP/robots/automation schemas
-8. CRM/smart-process items
-9. reports
-10. verification
-11. delta
-12. cutover
+2. schemas/custom fields/categories/stages
+3. contacts/companies
+4. deals
+5. crm comments
+6. crm file refs
+7. groups/projects
+8. tasks
+9. comments
+10. file refs
+11. verification
+12. delta/cutover
 
 ## Verification coverage
 
@@ -181,6 +183,8 @@ Enterprise extensions:
 - `groups:sync`
 - `projects:sync`
 - `tasks:migrate`
+- `crm:sync`
+- `crm:verify`
 - `verify:counts`
 - `verify:relations`
 - `verify:integrity`
