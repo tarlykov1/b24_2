@@ -1,18 +1,4 @@
 services:
-  app:
-    build: .
-    depends_on:
-      - db
-    env_file:
-      - .env
-    environment:
-      MIGRATION_CONFIG_PATH: /config/migration.config.yml
-    ports:
-      - "127.0.0.1:18080:8000"
-    volumes:
-      - ./docker/config:/config
-    restart: unless-stopped
-
   db:
     image: mariadb:11
     environment:
@@ -22,16 +8,37 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
     volumes:
       - b24_db_data:/var/lib/mysql
-    ports:
-      - "127.0.0.1:13306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
 
-  adminer:
-    image: adminer:latest
+  web:
+    build: .
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      MIGRATION_CONFIG_PATH: /app/migration.config.yml
+    volumes:
+      - ./migration.config.yml:/app/migration.config.yml:ro
     ports:
-      - "127.0.0.1:18081:8080"
+      - "${B24_WEB_PORT:-8080}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import base64,os,sys,urllib.request;u=os.getenv('B24_WEB_USERNAME','');p=os.getenv('B24_WEB_PASSWORD','');req=urllib.request.Request('http://127.0.0.1:8000/health');\nif u and p:req.add_header('Authorization','Basic '+base64.b64encode(f'{u}:{p}'.encode()).decode());\nresp=urllib.request.urlopen(req,timeout=5);sys.exit(0 if resp.status==200 else 1)\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

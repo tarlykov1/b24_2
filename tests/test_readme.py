@@ -28,8 +28,9 @@ def test_readme_cli_examples_match_current_commands() -> None:
         assert cmd in content
 
 
-def test_readme_documents_zero_input_installer() -> None:
+def test_readme_documents_one_command_docker_installer() -> None:
     content = README_PATH.read_text(encoding="utf-8")
 
     assert "./install.sh" in content
-    assert "docker-compose.db.yml" in content
+    assert "docker compose up -d --build" in content
+    assert "migration.config.yml" in content

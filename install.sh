@@ -4,13 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-CONFIG_PATH="${B24_CONFIG_PATH:-migration.config.yml}"
 STATE_DIR="${B24_INSTALL_STATE_DIR:-.local/install}"
-DB_ENV_PATH="$STATE_DIR/db.env"
-VENV_PATH="${B24_VENV_PATH:-.venv}"
-DB_PORT="${B24_DB_PORT:-13306}"
+ENV_PATH="${B24_ENV_PATH:-.env}"
+CONFIG_PATH="${B24_CONFIG_PATH:-migration.config.yml}"
+WEB_PORT="${B24_WEB_PORT:-8080}"
+DEFAULT_WEB_USERNAME="${B24_WEB_USERNAME:-admin}"
+DEFAULT_WEB_PASSWORD="${B24_WEB_PASSWORD:-2156}"
 DB_NAME="${B24_DB_NAME:-b24_runtime}"
 DB_USER="${B24_DB_USER:-b24_user}"
+DB_HOST="${B24_DB_HOST:-db}"
+DB_PORT="${B24_DB_PORT:-3306}"
 
 log() {
   printf '[install] %s\n' "$*"
@@ -36,69 +39,45 @@ choose_compose() {
 }
 
 gen_password() {
-  python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(24))
-PY
+  tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
 }
 
-write_db_env_if_needed() {
+ensure_state_dir() {
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
+}
 
-  if [[ -f "$DB_ENV_PATH" ]]; then
-    log "Reusing existing DB credentials at $DB_ENV_PATH"
+write_env_if_needed() {
+  if [[ -f "$ENV_PATH" ]]; then
+    log "Reusing existing env file: $ENV_PATH"
     return
   fi
 
-  local password root_password
-  password="$(gen_password)"
-  root_password="$(gen_password)"
+  ensure_state_dir
+
+  local mysql_password mysql_root_password
+  mysql_password="$(gen_password)"
+  mysql_root_password="$(gen_password)"
 
   umask 077
-  cat > "$DB_ENV_PATH" <<ENV
+  cat > "$ENV_PATH" <<ENV
 MYSQL_DATABASE=$DB_NAME
 MYSQL_USER=$DB_USER
-MYSQL_PASSWORD=$password
-MYSQL_ROOT_PASSWORD=$root_password
+MYSQL_PASSWORD=$mysql_password
+MYSQL_ROOT_PASSWORD=$mysql_root_password
+B24_WEB_USERNAME=$DEFAULT_WEB_USERNAME
+B24_WEB_PASSWORD=$DEFAULT_WEB_PASSWORD
+B24_WEB_PORT=$WEB_PORT
 ENV
-  chmod 600 "$DB_ENV_PATH"
-  log "Generated DB credentials at $DB_ENV_PATH"
+  chmod 600 "$ENV_PATH"
+  log "Generated env file: $ENV_PATH"
 }
 
-load_db_env() {
+load_env() {
   set -a
   # shellcheck disable=SC1090
-  source "$DB_ENV_PATH"
+  source "$ENV_PATH"
   set +a
-}
-
-bring_up_db() {
-  log "Starting MySQL container via docker-compose.db.yml"
-  "${COMPOSE_CMD[@]}" -f docker-compose.db.yml up -d
-}
-
-wait_for_db_healthy() {
-  log "Waiting for DB healthcheck"
-  local cid status attempt
-  cid="$("${COMPOSE_CMD[@]}" -f docker-compose.db.yml ps -q db)"
-  [[ -n "$cid" ]] || fail "DB container id was not found"
-
-  for attempt in $(seq 1 90); do
-    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
-    if [[ "$status" == "healthy" ]]; then
-      log "DB is healthy"
-      return
-    fi
-    if [[ "$status" == "exited" || "$status" == "dead" ]]; then
-      "${COMPOSE_CMD[@]}" -f docker-compose.db.yml logs db || true
-      fail "DB container failed with status=$status"
-    fi
-    sleep 2
-  done
-
-  "${COMPOSE_CMD[@]}" -f docker-compose.db.yml logs db || true
-  fail "Timed out while waiting for DB health status"
 }
 
 write_config_if_needed() {
@@ -110,7 +89,7 @@ write_config_if_needed() {
   umask 077
   cat > "$CONFIG_PATH" <<CFG
 runtime_mode: production
-database_url: mysql+pymysql://$MYSQL_USER:$MYSQL_PASSWORD@127.0.0.1:$DB_PORT/$MYSQL_DATABASE
+database_url: mysql+pymysql://$MYSQL_USER:$MYSQL_PASSWORD@$DB_HOST:$DB_PORT/$MYSQL_DATABASE
 source:
   base_url: https://source.example
   webhook: replace-with-source-webhook
@@ -125,53 +104,71 @@ CFG
   log "Generated config: $CONFIG_PATH"
 }
 
-ensure_venv_and_deps() {
-  if [[ ! -d "$VENV_PATH" ]]; then
-    log "Creating Python virtualenv at $VENV_PATH"
-    python3 -m venv "$VENV_PATH"
-  fi
-
-  log "Installing Python dependencies"
-  "$VENV_PATH/bin/pip" install --upgrade pip
-  "$VENV_PATH/bin/pip" install -e .
+compose_up() {
+  log "Starting docker compose stack"
+  "${COMPOSE_CMD[@]}" up -d --build
 }
 
-run_install_flow() {
-  log "Running application-level local install flow"
-  "$VENV_PATH/bin/b24-runtime" install:local --config "$CONFIG_PATH"
+wait_for_service_health() {
+  local service="$1"
+  local cid status
+  cid="$("${COMPOSE_CMD[@]}" ps -q "$service")"
+  [[ -n "$cid" ]] || fail "Container id not found for service: $service"
+
+  for _ in $(seq 1 120); do
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    if [[ "$status" == "healthy" ]]; then
+      log "$service is healthy"
+      return
+    fi
+    if [[ "$status" == "exited" || "$status" == "dead" ]]; then
+      "${COMPOSE_CMD[@]}" logs "$service" || true
+      fail "$service failed with status=$status"
+    fi
+    sleep 2
+  done
+
+  "${COMPOSE_CMD[@]}" logs "$service" || true
+  fail "Timed out waiting for healthy status: $service"
+}
+
+detect_server_ip() {
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -z "$ip" ]]; then
+    ip="127.0.0.1"
+  fi
+  printf '%s' "$ip"
 }
 
 print_summary() {
-  log "готово"
+  local server_ip
+  server_ip="$(detect_server_ip)"
+
   cat <<SUMMARY
 
-Install summary:
-- config: $CONFIG_PATH
-- db compose file: docker-compose.db.yml
-- db host: 127.0.0.1
-- db port: $DB_PORT
-- db name: $MYSQL_DATABASE
-- db user: $MYSQL_USER
-- db secrets file: $DB_ENV_PATH
+Install complete
+Web UI: http://$server_ip:${B24_WEB_PORT}
+Login: ${B24_WEB_USERNAME}
+Password: ${B24_WEB_PASSWORD}
+Config: ./$CONFIG_PATH
 
 Useful commands:
-- DB status: ${COMPOSE_CMD[*]} -f docker-compose.db.yml ps
-- DB logs:   ${COMPOSE_CMD[*]} -f docker-compose.db.yml logs db
-- DB stop:   ${COMPOSE_CMD[*]} -f docker-compose.db.yml down
+- Status: ${COMPOSE_CMD[*]} ps
+- Logs:   ${COMPOSE_CMD[*]} logs -f web db
+- Stop:   ${COMPOSE_CMD[*]} down
 SUMMARY
 }
 
 main() {
   require_cmd docker
-  require_cmd python3
   choose_compose
-  write_db_env_if_needed
-  load_db_env
-  bring_up_db
-  wait_for_db_healthy
+  write_env_if_needed
+  load_env
   write_config_if_needed
-  ensure_venv_and_deps
-  run_install_flow
+  compose_up
+  wait_for_service_health db
+  wait_for_service_health web
   print_summary
 }
 
