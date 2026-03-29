@@ -418,6 +418,18 @@ class UserReviewQueueRepository:
         ).scalars().all()
         return [self._to_domain(row) for row in rows]
 
+    def close_open_by_source(self, source_id: str) -> None:
+        rows = self._session.execute(
+            select(UserReviewQueueRecord).where(
+                UserReviewQueueRecord.source_id == source_id,
+                UserReviewQueueRecord.status == "open",
+            )
+        ).scalars().all()
+        now = datetime.now(tz=timezone.utc)
+        for row in rows:
+            row.status = "resolved"
+            row.updated_at = now
+
     @staticmethod
     def _to_domain(row: UserReviewQueueRecord) -> UserReviewItem:
         return UserReviewItem(

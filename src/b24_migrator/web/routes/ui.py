@@ -240,6 +240,74 @@ def user_review_queue(svc: RuntimeService = Depends(get_runtime_service), limit:
     return {"ok": True, "data": {"queue": svc.list_user_review_queue(limit=limit)}}
 
 
+@router.post("/users/map")
+def users_map(
+    source_users_json: str = Form(...),
+    target_users_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    source_users = _parse_json_form(source_users_json, "source_users_json")
+    target_users = _parse_json_form(target_users_json, "target_users_json")
+    return {"ok": True, "data": {"users_map": svc.users_map(source_users, target_users, actor=actor)}}
+
+
+@router.post("/users/review/resolve")
+def user_review_resolve(
+    source_id: str = Form(...),
+    target_id: str = Form(...),
+    target_uid: str | None = Form(default=None),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"users_review": svc.users_review(source_id=source_id, target_id=target_id, target_uid=target_uid, actor=actor)}}
+
+
+@router.post("/groups/sync")
+def groups_sync(
+    source_groups_json: str = Form(...),
+    target_groups_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "data": {"groups_sync": svc.groups_sync(_parse_json_form(source_groups_json, "source_groups_json"), _parse_json_form(target_groups_json, "target_groups_json"), actor=actor)},
+    }
+
+
+@router.post("/projects/sync")
+def projects_sync(
+    source_projects_json: str = Form(...),
+    target_projects_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "data": {"projects_sync": svc.projects_sync(_parse_json_form(source_projects_json, "source_projects_json"), _parse_json_form(target_projects_json, "target_projects_json"), actor=actor)},
+    }
+
+
+@router.post("/tasks/migrate")
+def tasks_migrate(source_tasks_json: str = Form(...), svc: RuntimeService = Depends(get_runtime_service), actor: str = Depends(current_actor)) -> dict[str, Any]:
+    return {"ok": True, "data": {"tasks_migrate": svc.tasks_migrate(_parse_json_form(source_tasks_json, "source_tasks_json"), actor=actor)}}
+
+
+@router.post("/comments/migrate")
+def comments_migrate(
+    source_comments_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"comments_migrate": svc.comments_migrate(_parse_json_form(source_comments_json, "source_comments_json"), actor=actor)}}
+
+
+@router.post("/files/refs/migrate")
+def file_refs_migrate(source_refs_json: str = Form(...), svc: RuntimeService = Depends(get_runtime_service), actor: str = Depends(current_actor)) -> dict[str, Any]:
+    return {"ok": True, "data": {"file_refs_migrate": svc.file_refs_migrate(_parse_json_form(source_refs_json, "source_refs_json"), actor=actor)}}
+
+
 @router.get("/verification/{run_id}")
 def verification_results(run_id: str, svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]:
     return {"ok": True, "data": {"results": svc.verification_results(run_id)}}
@@ -274,6 +342,8 @@ def cutover_readiness(run_id: str, svc: RuntimeService = Depends(get_runtime_ser
 def enterprise_view(request: Request, svc: RuntimeService = Depends(get_runtime_service), templates: Jinja2Templates = Depends(get_templates)):
     runs = svc.list_runs(limit=10)
     selected_run_id = runs[0].run_id if runs else None
+    unresolved_users = [asdict(row) for row in svc.list_mappings(entity_type="users", status="unmatched", limit=200)]
+    ambiguous_users = [asdict(row) for row in svc.list_mappings(entity_type="users", status="ambiguous", limit=200)]
     return templates.TemplateResponse(
         request,
         "enterprise.html",
@@ -283,6 +353,14 @@ def enterprise_view(request: Request, svc: RuntimeService = Depends(get_runtime_
             "graph": svc.get_dependency_graph(),
             "mappings": [asdict(row) for row in svc.list_mappings(limit=30)],
             "review_queue": svc.list_user_review_queue(limit=30),
+            "unresolved_users": unresolved_users,
+            "ambiguous_users": ambiguous_users,
+            "users_blocking_execution": bool(unresolved_users or ambiguous_users or svc.list_user_review_queue(limit=1)),
+            "group_status": svc.list_mappings(entity_type="groups", limit=200),
+            "project_status": svc.list_mappings(entity_type="projects", limit=200),
+            "task_status": svc.list_mappings(entity_type="tasks", limit=200),
+            "comment_status": svc.list_mappings(entity_type="comments", limit=200),
+            "file_ref_status": svc.list_mappings(entity_type="file_refs", limit=200),
             "cleanup_preview": {"target_inspection": svc.target_inspection(), "cleanup_plan": svc.cleanup_plan(dry_run=True)},
             "delta_plan": svc.delta_plan(),
             "verification_results": svc.verification_results(selected_run_id) if selected_run_id else [],

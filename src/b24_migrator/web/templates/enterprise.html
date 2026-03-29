@@ -3,6 +3,9 @@
 <section class="card">
   <h2>Enterprise migration control</h2>
   <p>Dependency-driven migration with canonical mappings, conflict queue and cutover safety rails.</p>
+  {% if users_blocking_execution %}
+  <p><strong>Execution blocked:</strong> unresolved/ambiguous user mappings must be reviewed before dependent domains run safely.</p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -35,6 +38,7 @@
 <section class="grid">
   <div class="card">
     <h3>Users mapping review</h3>
+    <div>unresolved={{unresolved_users|length}}, ambiguous={{ambiguous_users|length}}, queue={{review_queue|length}}</div>
     {% if review_queue %}
       {% for q in review_queue %}
       <div>source {{q.source_id}} · {{q.reason}} · candidates {{q.candidates|length}}</div>
@@ -52,6 +56,17 @@
     {% else %}
       <div>No verification results yet.</div>
     {% endif %}
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>Groups/Projects migration status</h3>
+    <div>groups={{group_status|length}}, projects={{project_status|length}}</div>
+  </div>
+  <div class="card">
+    <h3>Tasks/Comments/File refs status</h3>
+    <div>tasks={{task_status|length}}, comments={{comment_status|length}}, file_refs={{file_ref_status|length}}</div>
   </div>
 </section>
 

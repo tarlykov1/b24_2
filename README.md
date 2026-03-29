@@ -4,12 +4,12 @@ Production-oriented runtime for deterministic Bitrix24 migration with **CLI + We
 
 ## Summary
 
-This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds enterprise migration building blocks:
+This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds first full **data-plane sprint**:
 
-- explicit supported migration matrix;
+- users/groups/projects/tasks/comments/file references end-to-end migration services;
 - canonical source↔target mapping subsystem (without relying on ID equality);
-- user conflict policy with manual review queue;
-- domain dependency graph and execution order;
+- user conflict policy with manual review queue + manual override API/CLI;
+- dependency-aware execution safety (users unresolved => dependent domains blocked);
 - expanded verification (`verify:counts`, `verify:relations`, `verify:integrity`, `verify:files`) persisted in DB;
 - cleanup/delta/cutover planning with safety rails (dry-run first, preserve users policy);
 - enterprise UI screen for matrix/mappings/conflicts/verification/cleanup/delta.
@@ -29,14 +29,14 @@ Unchanged architectural baseline from previous PR:
 | Entity | Status | Source API | Target API | Dependencies | Mapping | Verification | Delta | Cleanup | Risk notes |
 |---|---|---|---|---|---|---|---|---|---|
 | users | implemented | user.get/list | user.get/list | - | XML_ID/email/login/manual | counts+relations+integrity | incremental match refresh | preserve target users only | ambiguous identity review queue |
-| groups | partial | sonet_group.get | sonet_group.create/update | users | canonical map | counts+relations | planned | preview only | roles depend on user_map |
-| projects | partial | sonet_group.get(project) | sonet_group.create(project) | users, groups | canonical map | counts+relations | planned | preview only | owner/scrum variance |
-| tasks | partial | tasks.task.list/get | tasks.task.add/update | users, groups/projects | canonical map | counts+relations+integrity | planned | preview only | assignee/group references |
+| groups | implemented | sonet_group.get | sonet_group.create/update | users | canonical map | counts+relations+integrity | planned | preview only | blocked on unresolved user_map |
+| projects | implemented | sonet_group.get(project) | sonet_group.create(project) | users, groups | canonical map | counts+relations+integrity | planned | preview only | owner/member links via user_map |
+| tasks | implemented | tasks.task.list/get | tasks.task.add/update | users, groups/projects | canonical map | counts+relations+integrity | planned | preview only | blocks on unresolved user/group/project refs |
 | crm | partial | crm.*.list | crm.*.add/update | users, schemas | canonical map | counts+relations+integrity | planned | preview only | stage/category remap |
 | business processes | partial | bizproc.workflow.template.list | bizproc.workflow.template.add | users, schemas | canonical map | relations+integrity | planned | preview only | template constants/users |
 | smart processes | partial | crm.type + crm.item | crm.type + crm.item | users, schemas | canonical map | counts+relations+integrity | planned | preview only | type before items |
-| comments | partial | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | relations+integrity | planned | preview only | owner entity mapping first |
-| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | payload transfer policy |
+| comments | implemented | task/crm comment APIs | timeline/comment APIs | tasks, crm, smart processes | canonical map | counts+relations+integrity | planned | preview only | comment->task and comment->author verification |
+| files | partial | disk.file.* | disk.file.upload | comments, crm, tasks | canonical map | files+integrity | planned | preview only | metadata/reference layer implemented, payload copy planned |
 | reports | planned | report.* | report.* | users, crm/tasks/items | canonical map | relations | planned | preview only | API variance by plan |
 | robots | partial | crm.automation.* | crm.automation.* | bp, schemas | canonical map | relations+integrity | planned | preview only | stage/action remap |
 | webhooks | implemented | event.bind/list | event.bind/list | users | canonical map | integrity | planned | preview only | rotate secrets at cutover |
@@ -91,15 +91,16 @@ Execution order graph:
 
 1. users
 2. groups/projects
-3. schemas/custom fields/categories/stages
-4. BP/robots/automation schemas
-5. CRM/tasks/smart-process items
-6. comments
-7. files
-8. reports
-9. verification
-10. delta
-11. cutover
+3. tasks
+4. comments
+5. file refs
+6. schemas/custom fields/categories/stages
+7. BP/robots/automation schemas
+8. CRM/smart-process items
+9. reports
+10. verification
+11. delta
+12. cutover
 
 ## Verification coverage
 
@@ -110,14 +111,15 @@ Checks persisted in `migration_verification_results`:
 - `verify:integrity`
 - `verify:files`
 
-Relation rules covered:
+Relation rules covered (including new sprint domains):
 
-- task -> user
+- task -> creator/responsible/accomplices/auditors user mappings
 - task -> group/project
+- comment -> task
+- comment -> author
+- file ref -> task
 - deal -> company/contact
 - crm entity -> stage/category/custom field
-- comment -> entity
-- file -> owner entity
 - bp template -> user/field/entity-type
 - robot -> stage/action/assignee
 - smart process item -> type/field/entity
@@ -173,6 +175,16 @@ Enterprise extensions:
 - `matrix`
 - `domains`
 - `mappings`
+- `users:discover`
+- `users:map`
+- `users:review`
+- `groups:sync`
+- `projects:sync`
+- `tasks:migrate`
+- `verify:counts`
+- `verify:relations`
+- `verify:integrity`
+- `verify:files`
 - `verify:results`
 - `cleanup:plan`
 - `cleanup:execute`
@@ -190,9 +202,12 @@ Config keeps `runtime_mode` and **MySQL-only** production rule from baseline (`r
 
 New/updated tests include:
 
-- mapping upsert/list and user conflict policy
-- verification persistence/check API
-- new web API surfaces for matrix/mappings/review/cleanup/delta/cutover
+- user matching policy (XML_ID/email/login/manual), ambiguous queue, manual override
+- unresolved users blocking groups/tasks migration
+- task/comment/file reference relation checks
+- file refs verification with explicit partial payload-copy status
+- CLI regression for new data-plane commands
+- API tests for mapping review + domain migration endpoints
 - existing CLI/web regression
 
 Run with:
