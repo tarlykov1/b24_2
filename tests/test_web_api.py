@@ -2,9 +2,30 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+_MODULE_CONFIG_PATH = Path("/tmp/b24_web_tests_import.yml")
+if not _MODULE_CONFIG_PATH.exists():
+    _MODULE_CONFIG_PATH.write_text(
+        """
+runtime_mode: test
+database_url: sqlite+pysqlite:////tmp/b24_web_tests_import.db
+source:
+  base_url: https://source
+  webhook: one
+target:
+  base_url: https://target
+  webhook: two
+default_scope:
+  - crm
+  - tasks
+""",
+        encoding="utf-8",
+    )
+os.environ.setdefault("MIGRATION_CONFIG_PATH", str(_MODULE_CONFIG_PATH))
 
 from b24_migrator.web.app import create_app
 
@@ -111,6 +132,56 @@ def test_enterprise_endpoints(tmp_path: Path) -> None:
 
     enterprise = client.get("/enterprise")
     assert enterprise.status_code == 200
+
+
+def test_basic_auth_when_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("B24_WEB_USERNAME", "admin")
+    monkeypatch.setenv("B24_WEB_PASSWORD", "2156")
+    app = create_app(str(_write_config(tmp_path)))
+    client = TestClient(app)
+
+    no_auth = client.get("/health")
+    assert no_auth.status_code == 401
+
+    bad_auth = client.get("/health", auth=("admin", "wrong"))
+    assert bad_auth.status_code == 401
+
+    ok_auth = client.get("/health", auth=("admin", "2156"))
+    assert ok_auth.status_code == 200
+    assert ok_auth.json()["ok"] is True
+
+
+def test_config_mask_and_preserve_secrets(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    app = create_app(str(config_path))
+    client = TestClient(app)
+
+    config_screen = client.get("/config")
+    assert config_screen.status_code == 200
+    assert "sqlite+pysqlite:" in config_screen.text
+    assert "***" in config_screen.text
+    assert "one" not in config_screen.text
+    assert "two" not in config_screen.text
+
+    save_payload = {
+        "runtime_mode": "test",
+        "database_url": "sqlite+pysqlite:///***",
+        "source_base_url": "https://source2",
+        "source_webhook": "on***ne",
+        "target_base_url": "https://target2",
+        "target_webhook": "tw***wo",
+        "default_scope": "crm,tasks",
+    }
+    saved = client.post("/config/save", data=save_payload)
+    assert saved.status_code == 200
+
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "sqlite+pysqlite:///" in config_text
+    assert "runtime2.db" not in config_text
+    assert "on***ne" not in config_text
+    assert "tw***wo" not in config_text
+    assert '"webhook": "one"' in config_text
+    assert '"webhook": "two"' in config_text
 
 
 def test_mapping_review_and_data_plane_endpoints(tmp_path: Path) -> None:

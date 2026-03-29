@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-  <h2>Configuration</h2>
+  <h2>Конфигурация</h2>
   <form method="post" action="/config/save">
-    <label>runtime_mode <input name="runtime_mode" value="{{config.runtime_mode}}"/></label>
+    <label>Режим runtime <input name="runtime_mode" value="{{config.runtime_mode}}"/></label>
     <label>database_url <input name="database_url" value="{{config.database_url}}"/></label>
     <label>source.base_url <input name="source_base_url" value="{{config.source.base_url}}"/></label>
     <label>source.webhook <input name="source_webhook" value="{{config.source.webhook}}"/></label>
     <label>target.base_url <input name="target_base_url" value="{{config.target.base_url}}"/></label>
     <label>target.webhook <input name="target_webhook" value="{{config.target.webhook}}"/></label>
-    <label>default_scope <input name="default_scope" value="{{config.default_scope|join(',')}}"/></label>
-    <button type="submit">Save config</button>
+    <label>Скоуп по умолчанию <input name="default_scope" value="{{config.default_scope|join(',')}}"/></label>
+    <button type="submit">Сохранить конфигурацию</button>
   </form>
 </section>
 {% endblock %}

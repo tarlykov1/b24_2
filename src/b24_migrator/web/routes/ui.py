@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
@@ -43,6 +44,12 @@ def dashboard(request: Request, svc: RuntimeService = Depends(get_runtime_servic
     runs = svc.list_runs(limit=10)
     audit = svc.list_audit(limit=10)
     last_errors = [asdict(item) for item in svc.list_logs(run_id=runs[0].run_id, level="ERROR")] if runs else []
+    unresolved_users = svc.list_mappings(entity_type="users", status="unmatched", limit=200)
+    ambiguous_users = svc.list_mappings(entity_type="users", status="ambiguous", limit=200)
+    crm_errors = [row for row in svc.list_mappings(status="error", limit=500) if str(row.entity_type).startswith("crm_")]
+    latest_job = asdict(jobs[0]) if jobs else None
+    latest_plan = asdict(plans[0]) if plans else None
+    latest_run = asdict(runs[0]) if runs else None
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -52,6 +59,12 @@ def dashboard(request: Request, svc: RuntimeService = Depends(get_runtime_servic
             "runs": [asdict(run) for run in runs],
             "audit": [asdict(entry) for entry in audit],
             "last_errors": last_errors,
+            "latest_job": latest_job,
+            "latest_plan": latest_plan,
+            "latest_run": latest_run,
+            "unresolved_users_count": len(unresolved_users),
+            "ambiguous_users_count": len(ambiguous_users),
+            "crm_errors_count": len(crm_errors),
         },
     )
 
@@ -65,6 +78,7 @@ def health(svc: RuntimeService = Depends(get_runtime_service)) -> dict[str, Any]
 @router.get("/config", response_class=HTMLResponse)
 def config_screen(request: Request, svc: RuntimeService = Depends(get_runtime_service), templates: Jinja2Templates = Depends(get_templates)):
     masked = svc.config.model_dump(mode="python")
+    masked["database_url"] = _mask_database_url(masked["database_url"])
     masked["source"]["webhook"] = _mask_secret(masked["source"]["webhook"])
     masked["target"]["webhook"] = _mask_secret(masked["target"]["webhook"])
     return templates.TemplateResponse(request, "config.html", {"config": masked})
@@ -89,11 +103,12 @@ def save_config_route(
     svc: RuntimeService = Depends(get_runtime_service),
     actor: str = Depends(current_actor),
 ) -> dict[str, Any]:
+    current_config = svc.config.model_dump(mode="python")
     payload = {
         "runtime_mode": runtime_mode,
-        "database_url": database_url,
-        "source": {"base_url": source_base_url, "webhook": source_webhook},
-        "target": {"base_url": target_base_url, "webhook": target_webhook},
+        "database_url": _preserve_masked_secret(database_url, current_config["database_url"]),
+        "source": {"base_url": source_base_url, "webhook": _preserve_masked_secret(source_webhook, current_config["source"]["webhook"])},
+        "target": {"base_url": target_base_url, "webhook": _preserve_masked_secret(target_webhook, current_config["target"]["webhook"])},
         "default_scope": [item.strip() for item in default_scope.split(",") if item.strip()],
     }
     try:
@@ -465,6 +480,21 @@ def _mask_secret(raw: str) -> str:
     if len(raw) <= 6:
         return "***"
     return f"{raw[:3]}***{raw[-2:]}"
+
+
+def _preserve_masked_secret(submitted: str, current_value: str) -> str:
+    return current_value if "***" in submitted else submitted
+
+
+def _mask_database_url(raw: str) -> str:
+    parts = urlsplit(raw)
+    if not parts.netloc or "@" not in parts.netloc:
+        return raw
+    auth, host = parts.netloc.rsplit("@", 1)
+    if ":" not in auth:
+        return raw
+    username, _password = auth.split(":", 1)
+    return urlunsplit((parts.scheme, f"{username}:***@{host}", parts.path, parts.query, parts.fragment))
 
 
 def _parse_json_form(raw: str, field: str) -> Any:

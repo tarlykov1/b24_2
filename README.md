@@ -235,6 +235,36 @@ Existing Docker setup remains valid (`docker compose up --build`). Enterprise ad
 
 Config keeps `runtime_mode` and **MySQL-only** production rule from baseline (`runtime_mode: production` + MySQL URL in production).
 
+## Web UI
+
+### Запуск
+
+```bash
+uvicorn b24_migrator.web.app:app
+```
+
+### Через systemd
+
+Готовый unit-файл: `deploy/systemd/b24-migrator-web.service`.
+
+Ключевые требования production:
+
+- bind только на `127.0.0.1:8000`;
+- внешний доступ только через reverse proxy (например, nginx).
+
+### Через nginx
+
+Готовый конфиг reverse proxy: `deploy/nginx/b24-migrator.conf`.
+
+### Авторизация
+
+Если заданы переменные ниже, включается HTTP Basic Auth для UI и API:
+
+```bash
+B24_WEB_USERNAME=admin
+B24_WEB_PASSWORD=2156
+```
+
 ## Manual/advanced install mode
 
 If you need fully manual DB provisioning/custom credentials:
