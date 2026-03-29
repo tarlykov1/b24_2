@@ -214,3 +214,25 @@ def test_new_data_plane_cli_commands(tmp_path: Path) -> None:
         ["tasks:migrate", "--config", str(config_path), "--source-tasks-json", '[{"id":"100","author_id":"1","responsible_id":"2","group_id":"10"}]'],
     )
     assert tasks.exit_code == ExitCode.SUCCESS
+
+    crm_sync = runner.invoke(
+        app,
+        [
+            "crm:sync",
+            "--config",
+            str(config_path),
+            "--source-categories-json",
+            '[{"id":"10","code":"PIPE_A","name":"A"}]',
+            "--target-categories-json",
+            '[{"id":"110","code":"PIPE_A","name":"A"}]',
+            "--source-stages-json",
+            '[{"id":"20","code":"STAGE_NEW","name":"New"}]',
+            "--target-stages-json",
+            '[{"id":"120","code":"STAGE_NEW","name":"New"}]',
+            "--source-custom-fields-json",
+            '[{"id":"30","code":"UF_1","type":"string"}]',
+            "--target-custom-fields-json",
+            '[{"id":"130","code":"UF_1"}]',
+        ],
+    )
+    assert crm_sync.exit_code == ExitCode.SUCCESS

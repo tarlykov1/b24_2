@@ -6,6 +6,9 @@
   {% if users_blocking_execution %}
   <p><strong>Execution blocked:</strong> unresolved/ambiguous user mappings must be reviewed before dependent domains run safely.</p>
   {% endif %}
+  {% if crm_blocking_execution %}
+  <p><strong>CRM blocked:</strong> unresolved CRM references detected (stage/category/user/company/contact/custom field dependencies).</p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -57,6 +60,27 @@
       <div>No verification results yet.</div>
     {% endif %}
   </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>CRM schemas and dictionaries status</h3>
+    <div>categories/stages/custom_fields={{crm_schema_status|length}}</div>
+  </div>
+  <div class="card">
+    <h3>CRM entities status</h3>
+    <div>contacts={{crm_contact_status|length}}, companies={{crm_company_status|length}}, deals={{crm_deal_status|length}}</div>
+    <div>crm_comments={{crm_comment_status|length}}, crm_file_refs={{crm_file_ref_status|length}}</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Unresolved CRM references</h3>
+  {% for r in unresolved_crm %}
+    <div>{{r.entity_type}}: {{r.source_id}} · {{r.status}} · {{r.resolution_strategy}}</div>
+  {% else %}
+    <div>No unresolved CRM references.</div>
+  {% endfor %}
 </section>
 
 <section class="grid">

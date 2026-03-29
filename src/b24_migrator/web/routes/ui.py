@@ -294,6 +294,81 @@ def tasks_migrate(source_tasks_json: str = Form(...), svc: RuntimeService = Depe
     return {"ok": True, "data": {"tasks_migrate": svc.tasks_migrate(_parse_json_form(source_tasks_json, "source_tasks_json"), actor=actor)}}
 
 
+@router.post("/crm/sync")
+def crm_sync(
+    source_categories_json: str = Form("[]"),
+    target_categories_json: str = Form("[]"),
+    source_stages_json: str = Form("[]"),
+    target_stages_json: str = Form("[]"),
+    source_custom_fields_json: str = Form("[]"),
+    target_custom_fields_json: str = Form("[]"),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "data": {
+            "crm_sync": svc.crm_sync(
+                _parse_json_form(source_categories_json, "source_categories_json"),
+                _parse_json_form(target_categories_json, "target_categories_json"),
+                _parse_json_form(source_stages_json, "source_stages_json"),
+                _parse_json_form(target_stages_json, "target_stages_json"),
+                _parse_json_form(source_custom_fields_json, "source_custom_fields_json"),
+                _parse_json_form(target_custom_fields_json, "target_custom_fields_json"),
+                actor=actor,
+            )
+        },
+    }
+
+
+@router.post("/crm/contacts/migrate")
+def crm_contacts_migrate(
+    source_contacts_json: str = Form(...),
+    target_contacts_json: str = Form("[]"),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"crm_contacts_migrate": svc.crm_contacts_migrate(_parse_json_form(source_contacts_json, "source_contacts_json"), _parse_json_form(target_contacts_json, "target_contacts_json"), actor=actor)}}
+
+
+@router.post("/crm/companies/migrate")
+def crm_companies_migrate(
+    source_companies_json: str = Form(...),
+    target_companies_json: str = Form("[]"),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"crm_companies_migrate": svc.crm_companies_migrate(_parse_json_form(source_companies_json, "source_companies_json"), _parse_json_form(target_companies_json, "target_companies_json"), actor=actor)}}
+
+
+@router.post("/crm/deals/migrate")
+def crm_deals_migrate(
+    source_deals_json: str = Form(...),
+    target_deals_json: str = Form("[]"),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"crm_deals_migrate": svc.crm_deals_migrate(_parse_json_form(source_deals_json, "source_deals_json"), _parse_json_form(target_deals_json, "target_deals_json"), actor=actor)}}
+
+
+@router.post("/crm/comments/migrate")
+def crm_comments_migrate(
+    source_comments_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"crm_comments_migrate": svc.crm_comments_migrate(_parse_json_form(source_comments_json, "source_comments_json"), actor=actor)}}
+
+
+@router.post("/crm/files/refs/migrate")
+def crm_file_refs_migrate(
+    source_refs_json: str = Form(...),
+    svc: RuntimeService = Depends(get_runtime_service),
+    actor: str = Depends(current_actor),
+) -> dict[str, Any]:
+    return {"ok": True, "data": {"crm_file_refs_migrate": svc.crm_file_refs_migrate(_parse_json_form(source_refs_json, "source_refs_json"), actor=actor)}}
+
+
 @router.post("/comments/migrate")
 def comments_migrate(
     source_comments_json: str = Form(...),
@@ -344,6 +419,8 @@ def enterprise_view(request: Request, svc: RuntimeService = Depends(get_runtime_
     selected_run_id = runs[0].run_id if runs else None
     unresolved_users = [asdict(row) for row in svc.list_mappings(entity_type="users", status="unmatched", limit=200)]
     ambiguous_users = [asdict(row) for row in svc.list_mappings(entity_type="users", status="ambiguous", limit=200)]
+    unresolved_crm = [asdict(row) for row in svc.list_mappings(status="error", limit=500) if str(row.entity_type).startswith("crm_")]
+    unresolved_crm += [asdict(row) for row in svc.list_mappings(status="unmatched", limit=500) if str(row.entity_type).startswith("crm_")]
     return templates.TemplateResponse(
         request,
         "enterprise.html",
@@ -356,11 +433,19 @@ def enterprise_view(request: Request, svc: RuntimeService = Depends(get_runtime_
             "unresolved_users": unresolved_users,
             "ambiguous_users": ambiguous_users,
             "users_blocking_execution": bool(unresolved_users or ambiguous_users or svc.list_user_review_queue(limit=1)),
+            "crm_blocking_execution": bool(unresolved_crm),
+            "unresolved_crm": unresolved_crm[:200],
             "group_status": svc.list_mappings(entity_type="groups", limit=200),
             "project_status": svc.list_mappings(entity_type="projects", limit=200),
             "task_status": svc.list_mappings(entity_type="tasks", limit=200),
             "comment_status": svc.list_mappings(entity_type="comments", limit=200),
             "file_ref_status": svc.list_mappings(entity_type="file_refs", limit=200),
+            "crm_contact_status": svc.list_mappings(entity_type="crm_contacts", limit=200),
+            "crm_company_status": svc.list_mappings(entity_type="crm_companies", limit=200),
+            "crm_deal_status": svc.list_mappings(entity_type="crm_deals", limit=200),
+            "crm_comment_status": svc.list_mappings(entity_type="crm_comments", limit=200),
+            "crm_file_ref_status": svc.list_mappings(entity_type="crm_file_refs", limit=200),
+            "crm_schema_status": svc.list_mappings(entity_type="crm_categories", limit=200) + svc.list_mappings(entity_type="crm_stages", limit=200) + svc.list_mappings(entity_type="crm_custom_fields", limit=200),
             "cleanup_preview": {"target_inspection": svc.target_inspection(), "cleanup_plan": svc.cleanup_plan(dry_run=True)},
             "delta_plan": svc.delta_plan(),
             "verification_results": svc.verification_results(selected_run_id) if selected_run_id else [],

@@ -382,6 +382,53 @@ def tasks_migrate_command(
         _handle_error(exc)
 
 
+@app.command("crm:sync")
+def crm_sync_command(
+    source_categories_json: str = typer.Option("[]", "--source-categories-json"),
+    target_categories_json: str = typer.Option("[]", "--target-categories-json"),
+    source_stages_json: str = typer.Option("[]", "--source-stages-json"),
+    target_stages_json: str = typer.Option("[]", "--target-stages-json"),
+    source_custom_fields_json: str = typer.Option("[]", "--source-custom-fields-json"),
+    target_custom_fields_json: str = typer.Option("[]", "--target-custom-fields-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={
+                    "crm_sync": container.service.crm_sync(
+                        _loads_json(source_categories_json, field="source_categories_json"),
+                        _loads_json(target_categories_json, field="target_categories_json"),
+                        _loads_json(source_stages_json, field="source_stages_json"),
+                        _loads_json(target_stages_json, field="target_stages_json"),
+                        _loads_json(source_custom_fields_json, field="source_custom_fields_json"),
+                        _loads_json(target_custom_fields_json, field="target_custom_fields_json"),
+                    )
+                },
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("crm:verify")
+def crm_verify_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        report = container.service.get_report(run_id=run_id)
+        rows = [
+            r
+            for r in report["verification_results"]
+            if (r.check_type in {"verify:counts", "verify:relations", "verify:integrity", "verify:files"}) and (r.entity_type in {"crm", "global", "file_refs"})
+        ]
+        _emit(JsonResponse(ok=True, data={"results": [_asdict(r) for r in rows]}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
 @app.command("verify:counts")
 def verify_counts_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
     try:
