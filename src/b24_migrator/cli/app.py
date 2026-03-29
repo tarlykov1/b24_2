@@ -70,6 +70,13 @@ def _asdict(value: Any) -> dict[str, Any]:
         raise TypeError(f"Unsupported value for dict serialization: {type(value)!r}")
 
 
+def _loads_json(raw: str, *, field: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        raise AppError("VALIDATION_INVALID_JSON", f"Invalid JSON in {field}", {"field": field}) from exc
+
+
 @app.command("create-job")
 def create_job_command(config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
     try:
@@ -266,6 +273,157 @@ def mappings_command(
         _handle_error(exc)
     except SQLAlchemyError as exc:
         _handle_sqlalchemy_error(exc)
+
+
+@app.command("users:discover")
+def users_discover_command(
+    source_users_json: str = typer.Option(..., "--source-users-json"),
+    target_users_json: str = typer.Option(..., "--target-users-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        source_users = _loads_json(source_users_json, field="source_users_json")
+        target_users = _loads_json(target_users_json, field="target_users_json")
+        _emit(JsonResponse(ok=True, data={"users_discover": container.service.users_discover(source_users, target_users)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("users:map")
+def users_map_command(
+    source_users_json: str = typer.Option(..., "--source-users-json"),
+    target_users_json: str = typer.Option(..., "--target-users-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        source_users = _loads_json(source_users_json, field="source_users_json")
+        target_users = _loads_json(target_users_json, field="target_users_json")
+        _emit(JsonResponse(ok=True, data={"users_map": container.service.users_map(source_users, target_users)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("users:review")
+def users_review_command(
+    source_id: str = typer.Option(..., "--source-id"),
+    target_id: str = typer.Option(..., "--target-id"),
+    target_uid: str | None = typer.Option(None, "--target-uid"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        _emit(JsonResponse(ok=True, data={"users_review": container.service.users_review(source_id=source_id, target_id=target_id, target_uid=target_uid)}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("groups:sync")
+def groups_sync_command(
+    source_groups_json: str = typer.Option(..., "--source-groups-json"),
+    target_groups_json: str = typer.Option(..., "--target-groups-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={
+                    "groups_sync": container.service.groups_sync(
+                        _loads_json(source_groups_json, field="source_groups_json"),
+                        _loads_json(target_groups_json, field="target_groups_json"),
+                    )
+                },
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("projects:sync")
+def projects_sync_command(
+    source_projects_json: str = typer.Option(..., "--source-projects-json"),
+    target_projects_json: str = typer.Option(..., "--target-projects-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={
+                    "projects_sync": container.service.projects_sync(
+                        _loads_json(source_projects_json, field="source_projects_json"),
+                        _loads_json(target_projects_json, field="target_projects_json"),
+                    )
+                },
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("tasks:migrate")
+def tasks_migrate_command(
+    source_tasks_json: str = typer.Option(..., "--source-tasks-json"),
+    config: Path = typer.Option(Path("migration.config.yml"), "--config"),
+) -> None:
+    try:
+        container = RuntimeContainer(config)
+        container.ensure_schema()
+        _emit(JsonResponse(ok=True, data={"tasks_migrate": container.service.tasks_migrate(_loads_json(source_tasks_json, field="source_tasks_json"))}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("verify:counts")
+def verify_counts_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        report = container.service.get_report(run_id=run_id)
+        rows = [r for r in report["verification_results"] if r.check_type == "verify:counts"]
+        _emit(JsonResponse(ok=True, data={"results": [_asdict(r) for r in rows]}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("verify:relations")
+def verify_relations_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        report = container.service.get_report(run_id=run_id)
+        rows = [r for r in report["verification_results"] if r.check_type == "verify:relations"]
+        _emit(JsonResponse(ok=True, data={"results": [_asdict(r) for r in rows]}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("verify:integrity")
+def verify_integrity_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        report = container.service.get_report(run_id=run_id)
+        rows = [r for r in report["verification_results"] if r.check_type == "verify:integrity"]
+        _emit(JsonResponse(ok=True, data={"results": [_asdict(r) for r in rows]}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
+
+
+@app.command("verify:files")
+def verify_files_command(run_id: str = typer.Option(..., "--run-id"), config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        report = container.service.get_report(run_id=run_id)
+        rows = [r for r in report["verification_results"] if r.check_type == "verify:files"]
+        _emit(JsonResponse(ok=True, data={"results": [_asdict(r) for r in rows]}).to_dict())
+    except AppError as exc:
+        _handle_error(exc)
 
 
 @app.command("verify:results")

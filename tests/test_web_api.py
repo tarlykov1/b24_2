@@ -86,7 +86,7 @@ def test_enterprise_endpoints(tmp_path: Path) -> None:
 
     domains = client.get("/domains")
     assert domains.status_code == 200
-    assert len(domains.json()["data"]["dependency_graph"]) == 11
+    assert len(domains.json()["data"]["dependency_graph"]) == 12
 
     mapped = client.get("/mappings")
     assert mapped.status_code == 200
@@ -111,3 +111,38 @@ def test_enterprise_endpoints(tmp_path: Path) -> None:
 
     enterprise = client.get("/enterprise")
     assert enterprise.status_code == 200
+
+
+def test_mapping_review_and_data_plane_endpoints(tmp_path: Path) -> None:
+    app = create_app(str(_write_config(tmp_path)))
+    client = TestClient(app)
+
+    users_map = client.post(
+        "/users/map",
+        data={
+            "source_users_json": '[{"id":"1","xml_id":"u1"},{"id":"2","xml_id":"u2"}]',
+            "target_users_json": '[{"id":"11","xml_id":"u1"},{"id":"21","xml_id":"u2"},{"id":"22","xml_id":"u2"}]',
+        },
+    )
+    assert users_map.status_code == 200
+    assert users_map.json()["data"]["users_map"]["ambiguous"] == 1
+
+    review = client.post("/users/review/resolve", data={"source_id": "2", "target_id": "21"})
+    assert review.status_code == 200
+
+    groups = client.post(
+        "/groups/sync",
+        data={"source_groups_json": '[{"id":"10","name":"Dev","member_user_ids":["1","2"]}]', "target_groups_json": "[]"},
+    )
+    assert groups.status_code == 200
+
+    tasks = client.post(
+        "/tasks/migrate",
+        data={"source_tasks_json": '[{"id":"100","author_id":"1","responsible_id":"2","group_id":"10"}]'},
+    )
+    assert tasks.status_code == 200
+
+    comments = client.post("/comments/migrate", data={"source_comments_json": '[{"id":"500","task_id":"100","author_id":"1","body":"x"}]'})
+    assert comments.status_code == 200
+    files = client.post("/files/refs/migrate", data={"source_refs_json": '[{"id":"700","task_id":"100","name":"a.txt"}]'})
+    assert files.status_code == 200

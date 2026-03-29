@@ -173,3 +173,44 @@ def test_enterprise_cli_surfaces(tmp_path: Path) -> None:
     runner.invoke(app, ["report", "--config", str(config_path), "--run-id", run_id])
     verify_rows = runner.invoke(app, ["verify:results", "--config", str(config_path), "--run-id", run_id])
     assert verify_rows.exit_code == ExitCode.SUCCESS
+
+
+def test_new_data_plane_cli_commands(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    users_map = runner.invoke(
+        app,
+        [
+            "users:map",
+            "--config",
+            str(config_path),
+            "--source-users-json",
+            '[{"id":"1","xml_id":"u1"},{"id":"2","xml_id":"u2"}]',
+            "--target-users-json",
+            '[{"id":"11","xml_id":"u1"},{"id":"21","xml_id":"u2"},{"id":"22","xml_id":"u2"}]',
+        ],
+    )
+    assert users_map.exit_code == ExitCode.SUCCESS
+    assert json.loads(users_map.stdout)["data"]["users_map"]["ambiguous"] == 1
+
+    users_review = runner.invoke(app, ["users:review", "--config", str(config_path), "--source-id", "2", "--target-id", "21"])
+    assert users_review.exit_code == ExitCode.SUCCESS
+
+    groups = runner.invoke(
+        app,
+        [
+            "groups:sync",
+            "--config",
+            str(config_path),
+            "--source-groups-json",
+            '[{"id":"10","name":"Dev","member_user_ids":["1","2"]}]',
+            "--target-groups-json",
+            "[]",
+        ],
+    )
+    assert groups.exit_code == ExitCode.SUCCESS
+
+    tasks = runner.invoke(
+        app,
+        ["tasks:migrate", "--config", str(config_path), "--source-tasks-json", '[{"id":"100","author_id":"1","responsible_id":"2","group_id":"10"}]'],
+    )
+    assert tasks.exit_code == ExitCode.SUCCESS

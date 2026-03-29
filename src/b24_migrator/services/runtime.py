@@ -13,6 +13,7 @@ from b24_migrator.config import RuntimeConfig, load_runtime_config
 from b24_migrator.domain.models import AuditEntry, Checkpoint, Job, LogEntry, MappingRecord, Plan, Run
 from b24_migrator.errors import AppError
 from b24_migrator.services.cutover import CutoverService
+from b24_migrator.services.data_plane import DataPlaneMigrationService
 from b24_migrator.services.domains import DomainRegistryService
 from b24_migrator.services.executor import ExecutionService
 from b24_migrator.services.mapping import MappingService, UserResolutionService
@@ -56,6 +57,7 @@ class RuntimeService:
         self.user_resolution = UserResolutionService()
         self.domain_registry = DomainRegistryService()
         self.cutover = CutoverService()
+        self.data_plane = DataPlaneMigrationService()
 
     def ensure_schema(self) -> None:
         Base.metadata.create_all(self.session_factory.engine)
@@ -286,6 +288,73 @@ class RuntimeService:
             self._audit(session, actor, "resolve_user_mapping", {"source_user": source_user}, "success", details)
             session.commit()
             return details
+
+    def users_discover(self, source_users: list[dict[str, Any]], target_users: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"source_count": len(source_users), "target_count": len(target_users)}
+
+    def users_map(self, source_users: list[dict[str, Any]], target_users: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.sync_users(session, source_users=source_users, target_users=target_users)
+            self._audit(session, actor, "users_map", {"source_count": len(source_users), "target_count": len(target_users)}, "success", result)
+            session.commit()
+            return result
+
+    def users_review(self, source_id: str, target_id: str, target_uid: str | None = None, actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            mapping = self.data_plane.user_review(session, source_id=source_id, target_id=target_id, target_uid=target_uid, actor=actor)
+            payload = to_dict(mapping)
+            self._audit(session, actor, "users_review", {"source_id": source_id, "target_id": target_id}, "success", payload)
+            session.commit()
+            return payload
+
+    def groups_sync(self, source_groups: list[dict[str, Any]], target_groups: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            user_map = {m.source_id: m.target_id for m in MappingRepository(session).list_all(entity_type="users", status="resolved", limit=50000) if m.target_id}
+            result = self.data_plane.sync_groups_or_projects(
+                session,
+                entity_type="groups",
+                source_entities=source_groups,
+                target_entities=target_groups,
+                user_map=user_map,
+            )
+            self._audit(session, actor, "groups_sync", {"source_count": len(source_groups)}, "success", result)
+            session.commit()
+            return result
+
+    def projects_sync(self, source_projects: list[dict[str, Any]], target_projects: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            user_map = {m.source_id: m.target_id for m in MappingRepository(session).list_all(entity_type="users", status="resolved", limit=50000) if m.target_id}
+            result = self.data_plane.sync_groups_or_projects(
+                session,
+                entity_type="projects",
+                source_entities=source_projects,
+                target_entities=target_projects,
+                user_map=user_map,
+            )
+            self._audit(session, actor, "projects_sync", {"source_count": len(source_projects)}, "success", result)
+            session.commit()
+            return result
+
+    def tasks_migrate(self, source_tasks: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_tasks(session, source_tasks=source_tasks)
+            self._audit(session, actor, "tasks_migrate", {"source_count": len(source_tasks)}, "success", result)
+            session.commit()
+            return result
+
+    def comments_migrate(self, source_comments: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_comments(session, source_comments=source_comments)
+            self._audit(session, actor, "comments_migrate", {"source_count": len(source_comments)}, "success", result)
+            session.commit()
+            return result
+
+    def file_refs_migrate(self, source_refs: list[dict[str, Any]], actor: str = "system") -> dict[str, Any]:
+        with self.session_factory.create_session() as session:
+            result = self.data_plane.migrate_file_refs(session, source_refs=source_refs)
+            self._audit(session, actor, "file_refs_migrate", {"source_count": len(source_refs)}, "success", result)
+            session.commit()
+            return result
 
     def list_user_review_queue(self, limit: int = 500) -> list[dict[str, Any]]:
         with self.session_factory.create_session() as session:
