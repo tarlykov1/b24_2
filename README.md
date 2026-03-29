@@ -2,6 +2,39 @@
 
 Production-oriented runtime for deterministic Bitrix24 migration with **CLI + Web UI** over one shared service layer.
 
+## Zero-input local install (recommended)
+
+Main install path is now a short zero-input flow:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+What `install.sh` does automatically:
+
+1. verifies `docker`, `docker compose` (or `docker-compose`), `python3`;
+2. generates local DB secrets in `.local/install/db.env` (safe permissions);
+3. starts MySQL/MariaDB in Docker via `docker-compose.db.yml`;
+4. waits for DB `healthy` state;
+5. creates `migration.config.yml` automatically (if missing);
+6. creates `.venv`, installs Python dependencies;
+7. runs `b24-runtime install:local` (deployment check + schema init + sanity checks);
+8. prints final **готово** summary with status and useful follow-up commands.
+
+Generated files are idempotent by default:
+
+- if `.local/install/db.env` exists, secrets are reused;
+- if `migration.config.yml` exists, installer does not overwrite it.
+
+Useful DB commands after install:
+
+```bash
+docker compose -f docker-compose.db.yml ps
+docker compose -f docker-compose.db.yml logs db
+docker compose -f docker-compose.db.yml down
+```
+
 ## Summary
 
 This repository keeps the already implemented baseline (RuntimeService, CLI wiring, FastAPI/Jinja2/HTMX UI, audit persistence, Docker) and adds first full **data-plane sprint** plus CRM sprint 2 data-plane:
@@ -201,6 +234,21 @@ Enterprise extensions:
 Existing Docker setup remains valid (`docker compose up --build`). Enterprise additions are schema-compatible via new Alembic revision `0003_enterprise_mapping_and_verification`.
 
 Config keeps `runtime_mode` and **MySQL-only** production rule from baseline (`runtime_mode: production` + MySQL URL in production).
+
+## Manual/advanced install mode
+
+If you need fully manual DB provisioning/custom credentials:
+
+1. Prepare MySQL yourself.
+2. Create `migration.config.yml` manually (or from `migration.config.yml.example`).
+3. Install dependencies and run checks:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/b24-runtime deployment:check --config migration.config.yml
+.venv/bin/b24-runtime install:local --config migration.config.yml
+```
 
 ## Testing
 

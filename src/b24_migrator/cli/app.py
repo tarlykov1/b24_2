@@ -27,6 +27,19 @@ class RuntimeContainer:
     def ensure_schema(self) -> None:
         self.service.ensure_schema()
 
+    def install_local(self) -> dict[str, Any]:
+        deployment = self.service.validate_deployment()
+        self.service.ensure_schema()
+        return {
+            "deployment_check": deployment,
+            "schema_init": {"status": "ok"},
+            "sanity": {
+                "matrix_entries": len(self.service.list_matrix()),
+                "domain_modules": len(self.service.list_domain_modules()),
+                "status": "ok",
+            },
+        }
+
 
 def _emit(payload: dict[str, object]) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
@@ -221,6 +234,29 @@ def deployment_check_command(config: Path = typer.Option(Path("migration.config.
                         "config_path": str(config),
                         "database": safe_database_details(container.config.database_url),
                         "status": "ok",
+                    }
+                },
+            ).to_dict()
+        )
+    except AppError as exc:
+        _handle_error(exc)
+    except SQLAlchemyError as exc:
+        _handle_sqlalchemy_error(exc)
+
+
+@app.command("install:local")
+def install_local_command(config: Path = typer.Option(Path("migration.config.yml"), "--config")) -> None:
+    try:
+        container = RuntimeContainer(config)
+        install_summary = container.install_local()
+        _emit(
+            JsonResponse(
+                ok=True,
+                data={
+                    "install": {
+                        "config_path": str(config),
+                        **install_summary,
+                        "status": "ready",
                     }
                 },
             ).to_dict()

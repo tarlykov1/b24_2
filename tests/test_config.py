@@ -79,3 +79,25 @@ def test_load_config_yaml_parse_error(tmp_path: Path) -> None:
         load_runtime_config(cfg)
 
     assert exc.value.code == "CONFIG_YAML_PARSE_ERROR"
+
+
+def test_load_config_from_auto_generated_mysql_payload(tmp_path: Path) -> None:
+    cfg = tmp_path / "migration.config.yml"
+    cfg.write_text(
+        """
+        runtime_mode: production
+        database_url: mysql+pymysql://b24_user:generated-secret@127.0.0.1:13306/b24_runtime
+        source:
+          base_url: https://source.example
+          webhook: src
+        target:
+          base_url: https://target.example
+          webhook: dst
+        """,
+        encoding="utf-8",
+    )
+
+    result = load_runtime_config(cfg)
+
+    assert result.runtime_mode == "production"
+    assert result.database_url.startswith("mysql+pymysql://b24_user:")

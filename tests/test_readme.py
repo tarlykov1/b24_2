@@ -23,5 +23,13 @@ def test_readme_cli_examples_match_current_commands() -> None:
         "b24-runtime deployment:check",
         "b24-runtime plan",
         "b24-runtime verify",
+        "b24-runtime install:local",
     ]:
         assert cmd in content
+
+
+def test_readme_documents_zero_input_installer() -> None:
+    content = README_PATH.read_text(encoding="utf-8")
+
+    assert "./install.sh" in content
+    assert "docker-compose.db.yml" in content
