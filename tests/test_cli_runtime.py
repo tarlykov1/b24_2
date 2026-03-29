@@ -138,6 +138,58 @@ def test_deployment_check_returns_sanitized_database_output(tmp_path: Path, monk
     assert "super_secret" not in db_payload["dsn"]
 
 
+def test_install_local_runs_deployment_schema_and_sanity(monkeypatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    from b24_migrator.cli import app as cli_app
+
+    calls: list[str] = []
+
+    class _FakeService:
+        def validate_deployment(self):
+            calls.append("deployment")
+            return {"status": "ok", "database": {"dsn": "mysql+pymysql://u:***@127.0.0.1:3306/db"}}
+
+        def ensure_schema(self):
+            calls.append("schema")
+
+        def list_matrix(self):
+            calls.append("matrix")
+            return [{}] * 3
+
+        def list_domain_modules(self):
+            calls.append("domains")
+            return [{}] * 4
+
+    class _FakeContainer:
+        def __init__(self, _config_path):
+            self.service = _FakeService()
+
+        def install_local(self):
+            deployment = self.service.validate_deployment()
+            self.service.ensure_schema()
+            return {
+                "deployment_check": deployment,
+                "schema_init": {"status": "ok"},
+                "sanity": {
+                    "matrix_entries": len(self.service.list_matrix()),
+                    "domain_modules": len(self.service.list_domain_modules()),
+                    "status": "ok",
+                },
+            }
+
+    monkeypatch.setattr(cli_app, "RuntimeContainer", _FakeContainer)
+
+    result = runner.invoke(app, ["install:local", "--config", str(config_path)])
+
+    assert result.exit_code == ExitCode.SUCCESS
+    payload = json.loads(result.stdout)
+    install = payload["data"]["install"]
+    assert install["status"] == "ready"
+    assert install["sanity"]["matrix_entries"] == 3
+    assert install["sanity"]["domain_modules"] == 4
+    assert calls == ["deployment", "schema", "matrix", "domains"]
+
+
 def test_status_requires_identifier(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 
