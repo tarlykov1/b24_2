@@ -39,7 +39,13 @@ choose_compose() {
 }
 
 gen_password() {
-  tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
+  python3 - <<'PY'
+import secrets
+import string
+
+alphabet = string.ascii_letters + string.digits
+print(''.join(secrets.choice(alphabet) for _ in range(32)), end='')
+PY
 }
 
 ensure_state_dir() {
@@ -162,6 +168,7 @@ SUMMARY
 
 main() {
   require_cmd docker
+  require_cmd python3
   choose_compose
   write_env_if_needed
   load_env
