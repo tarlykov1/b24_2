@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +16,7 @@ from b24_migrator.services.runtime import RuntimeService
 from b24_migrator.web.routes.ui import router as ui_router
 
 security = HTTPBasic()
+logger = logging.getLogger(__name__)
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
@@ -25,9 +27,20 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.state.config_path = selected_config
     app.state.runtime_service = RuntimeService(selected_config)
     app.state.runtime_service.ensure_schema()
-    app.state.templates = Jinja2Templates(directory=str(base_dir / "templates"))
+    templates_dir = base_dir / "templates"
+    if not templates_dir.is_dir():
+        raise RuntimeError(
+            f"Templates directory is missing: '{templates_dir}'. "
+            "Rebuild/reinstall the package to restore web assets."
+        )
+    app.state.templates = Jinja2Templates(directory=str(templates_dir))
 
-    app.mount("/static", StaticFiles(directory=str(base_dir / "static")), name="static")
+    static_dir = base_dir / "static"
+    app.state.static_enabled = static_dir.is_dir()
+    if app.state.static_enabled:
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    else:
+        logger.warning("Static assets directory is missing, /static route disabled: %s", static_dir)
 
     @app.middleware("http")
     async def basic_auth_middleware(request: Request, call_next):
