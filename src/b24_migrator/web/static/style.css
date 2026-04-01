@@ -1,1 +1,186 @@
-body{font-family:Arial,sans-serif;background:#f5f6f7;margin:0}header{padding:12px 20px;background:#1f2937;color:#fff}nav a{color:#fff;margin-right:10px}.card{background:#fff;border-radius:8px;padding:12px;margin:12px}.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.status.completed{color:#15803d}.status.paused{color:#ca8a04}.status.failed{color:#b91c1c}.status.passed{color:#15803d}.progress{height:12px;background:#e5e7eb;border-radius:6px}.progress>div{height:12px;background:#22c55e;border-radius:6px}label{display:block;margin:8px 0}input{width:100%;padding:6px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #e5e7eb;padding:6px;text-align:left;font-size:13px}
+:root {
+  --b24-bg: #eef2f6;
+  --b24-surface: #ffffff;
+  --b24-primary: #2fc6f6;
+  --b24-primary-dark: #1baedb;
+  --b24-sidebar: #1f3b57;
+  --b24-text: #2f3b52;
+  --b24-muted: #7f8fa4;
+  --b24-border: #d9e5ef;
+  --b24-success: #26c281;
+  --b24-warning: #f5a623;
+  --b24-danger: #eb5757;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  background: linear-gradient(180deg, #f4f8fc 0%, var(--b24-bg) 35%, #ebf1f7 100%);
+  color: var(--b24-text);
+}
+
+header {
+  background: linear-gradient(90deg, var(--b24-sidebar) 0%, #24537f 100%);
+  color: #fff;
+  padding: 14px 24px;
+  box-shadow: 0 6px 24px rgba(20, 49, 76, 0.24);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+header h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+nav a {
+  color: #fff;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+nav a:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.card {
+  background: var(--b24-surface);
+  border: 1px solid var(--b24-border);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: 0 3px 12px rgba(20, 49, 76, 0.08);
+}
+
+.card h2,
+.card h3 {
+  margin-top: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.status.completed,
+.status.passed {
+  color: var(--b24-success);
+  font-weight: 600;
+}
+
+.status.paused {
+  color: var(--b24-warning);
+  font-weight: 600;
+}
+
+.status.failed {
+  color: var(--b24-danger);
+  font-weight: 600;
+}
+
+.progress {
+  height: 10px;
+  background: #e7eef5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress > div {
+  height: 10px;
+  background: linear-gradient(90deg, var(--b24-primary), #79dbff);
+  border-radius: 999px;
+}
+
+label {
+  display: block;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--b24-border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fcfdff;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--b24-primary);
+  box-shadow: 0 0 0 3px rgba(47, 198, 246, 0.2);
+}
+
+button {
+  background: linear-gradient(180deg, var(--b24-primary) 0%, var(--b24-primary-dark) 100%);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+button:hover {
+  filter: brightness(1.03);
+}
+
+button:disabled {
+  background: #c8d7e5;
+  cursor: not-allowed;
+}
+
+pre.card {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  background: #f8fbff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  border: 1px solid var(--b24-border);
+  padding: 8px;
+  text-align: left;
+}
+
+th {
+  background: #f1f7fc;
+}
+
+ol li {
+  margin: 10px 0;
+}
